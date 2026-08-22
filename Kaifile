@@ -1,0 +1,40 @@
+environment roc {
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "nix"]
+  overlays: ["github:thebrandonlucas/roc-overlay"]
+}
+
+task bootstrap-kai {
+  environment: "roc"
+  run: ["nix", "run", "github:thebrandonlucas/kai#xkai", "--", "build", "plugins/aion/MachinePlugin.roc"]
+}
+
+task format {
+  environment: "roc"
+  run: ["roc", "fmt", "plugins/aion/MachinePlugin.roc"]
+}
+
+environment cli {
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "openssh"]
+  overlays: ["github:thebrandonlucas/roc-overlay"]
+}
+
+build aion {
+  environment: cli
+  run: ["roc", "build", "src/aion.roc", "--opt=size", "--output=aion"]
+  output: "aion"
+}
+
+build aion-init {
+  environment: roc
+  run: ["roc", "build", "src/aion-init.roc", "--opt=size", "--output=aion-init"]
+  output: "aion-init"
+}
+
+machine agent {
+  system: "x86_64-linux"
+  region: "nyc3"
+  size: "s-2vcpu-4gb"
+  provider: "ppq"
+  model: "openai/gpt-5.1-codex"
+  packages: ["git"]
+}
