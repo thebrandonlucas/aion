@@ -244,7 +244,8 @@ MachinePlugin := [].{
 			"  roc unbundle ${MachinePlugin.roc_http_name}.tar.zst",
 			"  substituteInPlace ${MachinePlugin.basic_cli_name}/main.roc --replace-fail '${MachinePlugin.roc_http_url}' \"$PWD/${MachinePlugin.roc_http_name}/main.roc\"",
 			"  substituteInPlace ${MachinePlugin.nix_interpolation("config.source")} --replace-fail '${MachinePlugin.basic_cli_url}' \"$PWD/${MachinePlugin.basic_cli_name}/main.roc\"",
-			"  substituteInPlace ${MachinePlugin.nix_interpolation("config.source")} --replace-fail '${MachinePlugin.roc_http_url}' \"$PWD/${MachinePlugin.roc_http_name}/main.roc\"",
+			# Apps that do not declare the http package have nothing to substitute.
+			"  substituteInPlace ${MachinePlugin.nix_interpolation("config.source")} --replace '${MachinePlugin.roc_http_url}' \"$PWD/${MachinePlugin.roc_http_name}/main.roc\"",
 			"  roc build ${MachinePlugin.nix_interpolation("config.source")} --opt=size --output=${MachinePlugin.nix_interpolation("config.output")}",
 			"  install -Dm755 ${MachinePlugin.nix_interpolation("config.output")} $out",
 			"''",
