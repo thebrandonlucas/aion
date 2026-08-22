@@ -3,14 +3,9 @@ environment roc {
   overlays: ["github:thebrandonlucas/roc-overlay"]
 }
 
-task bootstrap-kai {
-  environment: "roc"
-  run: ["nix", "run", "github:thebrandonlucas/kai#xkai", "--", "build", "plugins/aion/MachinePlugin.roc"]
-}
-
 task format {
   environment: "roc"
-  run: ["roc", "fmt", "plugins/aion/MachinePlugin.roc"]
+  run: ["roc", "fmt", "plugins/aion/MachinePlugin.roc", "src/aion-init.roc"]
 }
 
 environment cli {
@@ -20,13 +15,13 @@ environment cli {
 
 build aion {
   environment: cli
-  run: ["roc", "build", "src/aion.roc", "--opt=size", "--output=aion"]
+  source: "src/aion.roc"
   output: "aion"
 }
 
 build aion-init {
   environment: roc
-  run: ["roc", "build", "src/aion-init.roc", "--opt=size", "--output=aion-init"]
+  source: "src/aion-init.roc"
   output: "aion-init"
 }
 
