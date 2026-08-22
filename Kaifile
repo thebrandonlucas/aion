@@ -5,7 +5,7 @@ environment roc {
 
 task format {
   environment: "roc"
-  run: ["roc", "fmt", "plugins/aion/MachinePlugin.roc", "src/aion-init.roc"]
+  run: ["roc", "fmt", "plugins/aion/MachinePlugin.roc", "src/aion-init.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc"]
 }
 
 environment cli {

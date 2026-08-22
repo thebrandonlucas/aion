@@ -172,7 +172,8 @@ MachinePlugin := [].{
 			} else {
 				directory = ".kai/machines/agent"
 				copy_init = Exec({
-					args: ["-L", ".kai/artifacts/aion-init", "${directory}/aion-init"],
+					# -f replaces the previous read-only copy of the Nix store artifact.
+					args: ["-fL", ".kai/artifacts/aion-init", "${directory}/aion-init"],
 					command: "cp",
 				})
 				actions = [copy_init].concat(MachinePlugin.lock_actions(directory)).concat([
@@ -243,6 +244,7 @@ MachinePlugin := [].{
 			"  roc unbundle ${MachinePlugin.roc_http_name}.tar.zst",
 			"  substituteInPlace ${MachinePlugin.basic_cli_name}/main.roc --replace-fail '${MachinePlugin.roc_http_url}' \"$PWD/${MachinePlugin.roc_http_name}/main.roc\"",
 			"  substituteInPlace ${MachinePlugin.nix_interpolation("config.source")} --replace-fail '${MachinePlugin.basic_cli_url}' \"$PWD/${MachinePlugin.basic_cli_name}/main.roc\"",
+			"  substituteInPlace ${MachinePlugin.nix_interpolation("config.source")} --replace-fail '${MachinePlugin.roc_http_url}' \"$PWD/${MachinePlugin.roc_http_name}/main.roc\"",
 			"  roc build ${MachinePlugin.nix_interpolation("config.source")} --opt=size --output=${MachinePlugin.nix_interpolation("config.output")}",
 			"  install -Dm755 ${MachinePlugin.nix_interpolation("config.output")} $out",
 			"''",

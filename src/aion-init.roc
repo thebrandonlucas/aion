@@ -23,6 +23,12 @@ write_private! = |directory, path, bytes| {
 	Path.rename!(temporary, path)
 }
 
+install_model_key! = |home, bytes| {
+	directory = Path.join(home, ".config/aion")
+	write_private!(directory, Path.join(home, model_key_path), bytes)?
+	Stdout.line!("model key configured")
+}
+
 set_model_key! = || {
 	key = Str.from_utf8(Stdin.read_to_end!()?) ? |_| InvalidModelKey
 	trimmed = key.trim()
@@ -30,9 +36,22 @@ set_model_key! = || {
 		Err(InvalidModelKey)
 	} else {
 		home = Path.utf8(Env.var_str!(OsStr.utf8("HOME"))?)
-		directory = Path.join(home, ".config/aion")
-		write_private!(directory, Path.join(home, model_key_path), trimmed.to_utf8())?
-		Stdout.line!("model key configured")
+		install_model_key!(home, trimmed.to_utf8())
+	}
+}
+
+# Adopt a key staged by scp at ~/.config/aion/model-key.new. write_private!
+# stages through that same ".new" path, so the atomic rename also deletes it.
+adopt_model_key! = || {
+	home = Path.utf8(Env.var_str!(OsStr.utf8("HOME"))?)
+	incoming = Path.join(home, "${model_key_path}.new")
+	key = Str.from_utf8(Path.read_bytes!(incoming)?) ? |_| InvalidModelKey
+	trimmed = key.trim()
+	if trimmed.is_empty() {
+		Path.delete!(incoming) ?? {}
+		Err(InvalidModelKey)
+	} else {
+		install_model_key!(home, trimmed.to_utf8())
 	}
 }
 
@@ -56,7 +75,8 @@ main! = |args| {
 	commands = args.drop_first(1).map(OsStr.display)
 	match commands {
 		["set-model-key"] => set_model_key!()
+		["adopt-model-key"] => adopt_model_key!()
 		["install-ssh-key"] => install_ssh_key!()
-		_ => Err(InvalidArguments("usage: aion-init set-model-key|install-ssh-key"))
+		_ => Err(InvalidArguments("usage: aion-init set-model-key|adopt-model-key|install-ssh-key"))
 	}
 }
