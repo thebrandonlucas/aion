@@ -1,0 +1,14 @@
+environment bootstrap {
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "nix"]
+  overlays: ["github:thebrandonlucas/roc-overlay"]
+}
+
+task format-plugin {
+  environment: "bootstrap"
+  run: ["roc", "fmt", "plugins/aion/MachinePlugin.roc", "src/aion-init.roc"]
+}
+
+task bootstrap-kai {
+  environment: "bootstrap"
+  run: ["nix", "run", "github:thebrandonlucas/kai#xkai", "--", "build", "plugins/aion/MachinePlugin.roc"]
+}
