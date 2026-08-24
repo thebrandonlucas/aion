@@ -266,13 +266,13 @@ delete_space_object! = |config, key| {
 image_import_local! = |path| {
 	if AionState.has_image!()? {
 		Err(ImageAlreadyExists)
-	} else if !Path.is_file!(path)? or !Path.display(path).ends_with(".qcow2.gz") {
-		Err(InvalidLocalImage("path must be a local .qcow2.gz file"))
+	} else if !Path.is_file!(path)? or !Path.display(path).ends_with(".qcow2") {
+		Err(InvalidLocalImage("path must be a local .qcow2 file"))
 	} else {
 		config = spaces_config!()?
 		auth = token!()?
 		confirm_operation!("This uploads one temporary public-read object and imports one custom image into nyc3.", "import local image")?
-		key = "aion-imports/aion-agent-${U64.to_str(Random.seed_u64!()?)}-${U64.to_str(Random.seed_u64!()?)}.qcow2.gz"
+		key = "aion-imports/aion-agent-${U64.to_str(Random.seed_u64!()?)}-${U64.to_str(Random.seed_u64!()?)}.qcow2"
 		operation_tag = operation_tag!("image")?
 		status_for = |stage| operation_status(operation_tag, space_status(config, key, stage))
 		AionState.begin_image_import!(operation_tag, status_for("Upload not yet completed"))?
