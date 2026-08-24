@@ -14,7 +14,6 @@ DigitalOceanApi := [].{
 			.with_uri("https://api.digitalocean.com${path}")
 			.with_timeout(TimeoutMilliseconds(30000))
 			.add_header("Authorization", "Bearer ${token}")
-			.add_header("Content-Type", "application/json")
 			.add_header("User-Agent", "aion")
 
 	unexpected = |operation, response|
