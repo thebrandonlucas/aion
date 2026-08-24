@@ -25,15 +25,23 @@ build aion-init {
   output: "aion-init"
 }
 
-workflow prepare {
-  steps: ["build aion-init", "build aion", "machine-build agent"]
+environment agent {
+  packages: ["git", "pi-coding-agent"]
 }
 
-aion-machine agent {
-  system: "x86_64-linux"
-  region: "nyc3"
-  size: "s-2vcpu-4gb"
+service aion {
+  artifact: "aion-init"
   provider: "ppq"
   model: "openai/gpt-5.1-codex"
-  packages: ["git"]
+}
+
+machine agent {
+  environment: agent
+  system: "x86_64-linux"
+  users: ["aion"]
+  services: ["aion"]
+}
+
+workflow prepare {
+  steps: ["build aion", "image agent"]
 }

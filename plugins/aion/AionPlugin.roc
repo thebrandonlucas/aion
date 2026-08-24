@@ -43,20 +43,17 @@ AionPlugin := [].{
 		name: "build",
 	}
 
-	machine_command : Plugin.Command
-	machine_command = Plugin.Command.{
+	service_command : Plugin.Command
+	service_command = Plugin.Command.{
 		argument_policy: AllowArguments,
 		body: Body.object([
-			Body.required("system", String),
-			Body.required("region", String),
-			Body.required("size", String),
+			Body.required("artifact", String),
 			Body.required("provider", String),
 			Body.required("model", String),
-			Body.required("packages", StringList),
 		]),
 		config: NamedConfig({ lookup: QualifiedThenUnqualified, name_rules }),
-		config_block: RequiredConfigBlock("aion-machine"),
-		name: "machine-build",
+		config_block: RequiredConfigBlock("service"),
+		name: "service",
 	}
 
 	backend : Plugin.Backend
@@ -140,65 +137,104 @@ AionPlugin := [].{
 						command: "nix",
 					}),
 				])
-			Ok(Plugin.RenderResult.{ actions, artifacts: [], outputs: [], requests: [], requested_packages: [] })
+			Ok(
+				Plugin.RenderResult.{
+					actions,
+					artifacts: [
+						{
+							attributes: [
+								{ key: "backend", value: backend.name },
+								{ key: "target.system", value: "x86_64-linux" },
+							],
+							kind: "kai.build/v1",
+							name: artifact_name,
+							path: ".kai/artifacts/${artifact_name}",
+						},
+					],
+					outputs: [],
+					requests: [],
+					requested_packages: [],
+				},
+			)
 		},
 		validator: NoValidation,
 	}
 
-	machine_implementation : Plugin.Implementation
-	machine_implementation = Plugin.Implementation.{
-		actions: [WriteConfigUtf8({ output: "flake", path: ".kai/machines/agent/flake.nix" })],
+	service_implementation : Plugin.Implementation
+	service_implementation = Plugin.Implementation.{
+		actions: [],
 		backend: backend.name,
-		command: machine_command.name,
+		command: service_command.name,
 		renderer: |context| {
-			machine_name = match context.args {
+			service_name = match context.args {
 				[selected] => Ok(selected)
-				_ => Err({ byte_offset: None, message: "machine-build requires exactly one machine name" })
+				_ => Err({ byte_offset: None, message: "service requires exactly one name" })
 			}?
-			system = Body.get_string(context.config, "system") ? |_| {
+			artifact_name = Body.get_string(context.config, "artifact") ? |_| {
 				byte_offset: None,
-				message: "validated machine configuration is missing 'system'",
+				message: "validated service configuration is missing 'artifact'",
 			}
 			provider = Body.get_string(context.config, "provider") ? |_| {
 				byte_offset: None,
-				message: "validated machine configuration is missing 'provider'",
+				message: "validated service configuration is missing 'provider'",
 			}
 			model = Body.get_string(context.config, "model") ? |_| {
 				byte_offset: None,
-				message: "validated machine configuration is missing 'model'",
+				message: "validated service configuration is missing 'model'",
 			}
-			if machine_name != "agent" or system != "x86_64-linux" {
-				Err({ byte_offset: None, message: "the MVP supports only machine 'agent' on x86_64-linux" })
-			} else {
-				directory = ".kai/machines/agent"
-				copy_init = Exec({
-					# -f replaces the previous read-only copy of the Nix store artifact.
-					args: ["-fL", ".kai/artifacts/aion-init", "${directory}/aion-init"],
-					command: "cp",
-				})
-				actions = [copy_init].concat(AionPlugin.lock_actions(directory)).concat([
+			if service_name != "aion" or artifact_name != "aion-init" or provider != "ppq" or model != "openai/gpt-5.1-codex" {
+				return Err({ byte_offset: None, message: "the MVP supports only the fixed Aion agent service" })
+			}
+			requests = [{ args: ["build", backend.name, artifact_name], status: "service: build ${artifact_name}" }]
+			if !context.dependencies_resolved {
+				return Ok({ actions: [], artifacts: [], outputs: [], requests, requested_packages: [] })
+			}
+			build = match context.dependency_artifacts.keep_if(
+				|artifact| artifact.kind == "kai.build/v1" and artifact.name == artifact_name,
+			) {
+				[selected] => Ok(selected)
+				[] => Err({ byte_offset: None, message: "build '${artifact_name}' did not produce a kai.build/v1 artifact" })
+				_ => Err({ byte_offset: None, message: "build '${artifact_name}' produced multiple artifacts" })
+			}?
+			directory = ".kai/services/${service_name}"
+			artifact_path = ".kai/artifacts/.services/${service_name}"
+			actions = [
+				WriteUtf8({ content: AionPlugin.render_service_flake({}), path: "${directory}/flake.nix" }),
+				WriteUtf8({ content: AionPlugin.render_service_module(provider, model), path: "${directory}/default.nix" }),
+				Exec({ args: ["-fL", build.path, "${directory}/aion-init"], command: "cp" }),
+			]
+				.concat(AionPlugin.lock_actions(directory))
+				.concat([
 					Exec({
 						args: [
 							"build",
-							"path:${directory}#agent",
+							"path:${directory}#service",
 							"--no-update-lock-file",
-							"--print-build-logs",
 							"--out-link",
-							".kai/artifacts/agent-image",
+							artifact_path,
 						],
 						command: "nix",
 					}),
 				])
-				Ok(
-					Plugin.RenderResult.{
-						actions,
-						artifacts: [],
-						outputs: [{ name: "flake", text: AionPlugin.render_machine_flake(system, provider, model) }],
-						requests: [],
-						requested_packages: [],
-					},
-				)
-			}
+			Ok(
+				Plugin.RenderResult.{
+					actions,
+					artifacts: [
+						{
+							attributes: [
+								{ key: "backend", value: backend.name },
+								{ key: "target.system", value: "x86_64-linux" },
+							],
+							kind: "kai.nixos.service/v1",
+							name: service_name,
+							path: artifact_path,
+						},
+					],
+					outputs: [],
+					requests,
+					requested_packages: [],
+				},
+			)
 		},
 		validator: NoValidation,
 	}
@@ -254,80 +290,84 @@ AionPlugin := [].{
 		"\n",
 	)
 
-	render_machine_flake : Str, Str, Str -> Str
-	render_machine_flake = |system, provider, model| {
+	render_service_flake : {} -> Str
+	render_service_flake = |_| Str.join_with(
+		[
+			"{",
+			"  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";",
+			"  inputs.kai.url = \"github:thebrandonlucas/kai\";",
+			"  inputs.kai.inputs.nixpkgs.follows = \"nixpkgs\";",
+			"  outputs = { nixpkgs, kai, ... }: let",
+			"    system = \"x86_64-linux\";",
+			"    pkgs = nixpkgs.legacyPackages.\"x86_64-linux\";",
+			"  in { packages.\"x86_64-linux\".service = pkgs.runCommand \"aion-machine-service\" {} ''",
+			"    mkdir -p $out",
+			"    cp ${AionPlugin.nix_interpolation("./default.nix")} $out/default.nix",
+			"    cp ${AionPlugin.nix_interpolation("./aion-init")} $out/aion-init",
+			"    cp ${AionPlugin.nix_interpolation("kai.packages.\"x86_64-linux\".kai")}/bin/kai $out/kai",
+			"  ''; };",
+			"}",
+		],
+		"\n",
+	)
+
+	render_service_module : Str, Str -> Str
+	render_service_module = |provider, model| {
 		aion_init = AionPlugin.nix_interpolation("aionInit")
 		Str.join_with(
 			[
+				"{ modulesPath, pkgs, ... }:",
+				"let",
+				"  aionInit = pkgs.runCommand \"aion-init\" {} ''",
+				"    install -Dm755 ${AionPlugin.nix_interpolation("./aion-init")} $out/bin/aion-init",
+				"  '';",
+				"  kaiPackage = pkgs.runCommand \"kai\" {} ''",
+				"    install -Dm755 ${AionPlugin.nix_interpolation("./kai")} $out/bin/kai",
+				"  '';",
+				"in",
 				"{",
-				"  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";",
-				"  inputs.kai.url = \"github:thebrandonlucas/kai\";",
-				"  outputs = { nixpkgs, kai, ... }:",
-				"    let",
-				"      system = \"${system}\";",
-				"      pkgs = nixpkgs.legacyPackages.\"${system}\";",
-				"      initBinary = ./aion-init;",
-				"      aionInit = pkgs.runCommand \"aion-init\" {} ''",
-				"        install -Dm755 ${AionPlugin.nix_interpolation("initBinary")} $out/bin/aion-init",
-				"      '';",
-				"      kaiPackage = kai.packages.\"${system}\".kai;",
-				"      machine = nixpkgs.lib.nixosSystem {",
-				"        inherit system;",
-				"        modules = [ ({ modulesPath, pkgs, ... }: {",
-				"          imports = [ (modulesPath + \"/virtualisation/digital-ocean-image.nix\") ];",
-				"          image.baseName = \"aion-agent\";",
-				"          virtualisation.diskSize = 8192;",
-				"          virtualisation.digitalOcean.setSshKeys = false;",
-				"          users.mutableUsers = false;",
-				"          # Credentials are injected from DigitalOcean metadata at first boot, never baked into the image.",
-				"          users.allowNoPasswordLogin = true;",
-				"          users.users.root.hashedPassword = \"!\";",
-				"          users.users.aion = {",
-				"            isNormalUser = true; createHome = true; home = \"/home/aion\";",
-				"            shell = pkgs.bashInteractive;",
-				"          };",
-				"          services.openssh.settings = {",
-				"            PermitRootLogin = \"no\"; PasswordAuthentication = false;",
-				"            KbdInteractiveAuthentication = false;",
-				"          };",
-				"          networking.firewall.allowedTCPPorts = [ 22 ];",
-				"          environment.systemPackages = [ aionInit kaiPackage pkgs.git pkgs.pi-coding-agent ];",
-				"          environment.etc.\"aion/models.json\".text = builtins.toJSON {",
-				"            providers.${provider} = {",
-				"              baseUrl = \"https://api.ppq.ai/v1\"; api = \"openai-completions\";",
-				"              apiKey = \"!cat /home/aion/.config/aion/model-key\";",
-				"              models = [ {",
-				"                id = \"${model}\"; name = \"${model}\"; reasoning = true;",
-				"                input = [ \"text\" \"image\" ];",
-				"                cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };",
-				"                contextWindow = 200000; maxTokens = 32768;",
-				"              } ];",
-				"            };",
-				"          };",
-				"          environment.etc.\"aion/settings.json\".text = builtins.toJSON {",
-				"            defaultProvider = \"${provider}\"; defaultModel = \"${model}\";",
-				"            enableInstallTelemetry = false; enableUpdateCheck = false;",
-				"          };",
-				"          systemd.tmpfiles.rules = [",
-				"            \"d /home/aion/.pi 0700 aion users - -\"",
-				"            \"d /home/aion/.pi/agent 0700 aion users - -\"",
-				"            \"L+ /home/aion/.pi/agent/models.json - - - - /etc/aion/models.json\"",
-				"            \"L+ /home/aion/.pi/agent/settings.json - - - - /etc/aion/settings.json\"",
-				"          ];",
-				"          systemd.services.aion-ssh-key = {",
-				"            description = \"Install the one DigitalOcean SSH key for Aion\";",
-				"            wantedBy = [ \"multi-user.target\" ]; before = [ \"sshd.service\" ];",
-				"            after = [ \"digitalocean-metadata.service\" ]; requires = [ \"digitalocean-metadata.service\" ];",
-				"            serviceConfig = { Type = \"oneshot\"; RemainAfterExit = true; ExecStart = \"${aion_init}/bin/aion-init install-ssh-key\"; };",
-				"            unitConfig.ConditionPathExists = \"!/home/aion/.ssh/authorized_keys\";",
-				"          };",
-				"          system.stateVersion = \"25.11\";",
-				"        }) ];",
-				"      };",
-				"    in {",
-				"      nixosConfigurations.agent = machine;",
-				"      packages.\"${system}\".agent = machine.config.system.build.digitalOceanImage;",
+				"  imports = [ (modulesPath + \"/virtualisation/digital-ocean-config.nix\") ];",
+				"  virtualisation.digitalOcean.setSshKeys = false;",
+				"  users.mutableUsers = false;",
+				"  # Credentials are injected from DigitalOcean metadata at first boot, never baked into the image.",
+				"  users.allowNoPasswordLogin = true;",
+				"  users.users.root.hashedPassword = \"!\";",
+				"  users.users.aion.shell = pkgs.bashInteractive;",
+				"  services.openssh.settings = {",
+				"    PermitRootLogin = \"no\"; PasswordAuthentication = false;",
+				"    KbdInteractiveAuthentication = false;",
+				"  };",
+				"  networking.firewall.allowedTCPPorts = [ 22 ];",
+				"  environment.systemPackages = [ aionInit kaiPackage ];",
+				"  environment.etc.\"aion/models.json\".text = builtins.toJSON {",
+				"    providers.${provider} = {",
+				"      baseUrl = \"https://api.ppq.ai/v1\"; api = \"openai-completions\";",
+				"      apiKey = \"!cat /home/aion/.config/aion/model-key\";",
+				"      models = [ {",
+				"        id = \"${model}\"; name = \"${model}\"; reasoning = true;",
+				"        input = [ \"text\" \"image\" ];",
+				"        cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };",
+				"        contextWindow = 200000; maxTokens = 32768;",
+				"      } ];",
 				"    };",
+				"  };",
+				"  environment.etc.\"aion/settings.json\".text = builtins.toJSON {",
+				"    defaultProvider = \"${provider}\"; defaultModel = \"${model}\";",
+				"    enableInstallTelemetry = false; enableUpdateCheck = false;",
+				"  };",
+				"  systemd.tmpfiles.rules = [",
+				"    \"d /home/aion/.pi 0700 aion users - -\"",
+				"    \"d /home/aion/.pi/agent 0700 aion users - -\"",
+				"    \"L+ /home/aion/.pi/agent/models.json - - - - /etc/aion/models.json\"",
+				"    \"L+ /home/aion/.pi/agent/settings.json - - - - /etc/aion/settings.json\"",
+				"  ];",
+				"  systemd.services.aion-ssh-key = {",
+				"    description = \"Install the one DigitalOcean SSH key for Aion\";",
+				"    wantedBy = [ \"multi-user.target\" ]; before = [ \"sshd.service\" ];",
+				"    after = [ \"digitalocean-metadata.service\" ]; requires = [ \"digitalocean-metadata.service\" ];",
+				"    serviceConfig = { Type = \"oneshot\"; RemainAfterExit = true; ExecStart = \"${aion_init}/bin/aion-init install-ssh-key\"; };",
+				"    unitConfig.ConditionPathExists = \"!/home/aion/.ssh/authorized_keys\";",
+				"  };",
 				"}",
 			],
 			"\n",
@@ -338,11 +378,11 @@ AionPlugin := [].{
 	nix_interpolation = |expression| Str.join_with(["$", "{", expression, "}"], "")
 
 	commands : List(Plugin.Command)
-	commands = [build_command, machine_command]
+	commands = [build_command, service_command]
 
 	backends : List(Plugin.Backend)
 	backends = [backend]
 
 	implementations : List(Plugin.Implementation)
-	implementations = [build_implementation, machine_implementation]
+	implementations = [build_implementation, service_implementation]
 }
