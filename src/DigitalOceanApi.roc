@@ -12,7 +12,7 @@ DigitalOceanApi := [].{
 	request = |method, path, token|
 		Request.from_method(method)
 			.with_uri("https://api.digitalocean.com${path}")
-			.with_timeout(TimeoutMilliseconds(120000))
+			.with_timeout(TimeoutMilliseconds(30000))
 			.add_header("Authorization", "Bearer ${token}")
 			.add_header("Content-Type", "application/json")
 			.add_header("User-Agent", "aion")
@@ -29,11 +29,29 @@ DigitalOceanApi := [].{
 		}
 	}
 
+	decode_images! = |response| {
+		decoded : Try(DigitalOcean.ImagesResponse, _)
+		decoded = Http.decode_json_response(response)
+		match decoded {
+			Ok(wrapper) => Ok(wrapper.images)
+			Err(error) => Err(error)
+		}
+	}
+
 	decode_droplet! = |response| {
 		decoded : Try(DigitalOcean.DropletResponse, _)
 		decoded = Http.decode_json_response(response)
 		match decoded {
 			Ok(wrapper) => Ok(wrapper.droplet)
+			Err(error) => Err(error)
+		}
+	}
+
+	decode_droplets! = |response| {
+		decoded : Try(DigitalOcean.DropletsResponse, _)
+		decoded = Http.decode_json_response(response)
+		match decoded {
+			Ok(wrapper) => Ok(wrapper.droplets)
 			Err(error) => Err(error)
 		}
 	}
@@ -47,12 +65,34 @@ DigitalOceanApi := [].{
 		}
 	}
 
-	import_image! = |url, token| {
-		response = Http.send_json!(request(POST, "/v2/images", token), DigitalOcean.image_import_body(url))?
-		if Response.status(response) == 202 {
-			decode_image!(response)
+	# Billable POSTs are deliberately single-attempt. Only 4xx responses are
+	# definitive rejections; transport failures, other statuses, and accepted-
+	# response decode failures are uncertain.
+	import_image_once! = |url, operation_tag, token| {
+		match Http.send_json!(request(POST, "/v2/images", token), DigitalOcean.image_import_body(url, operation_tag)) {
+			Err(error) => PostUncertain(error)
+			Ok(response) => {
+				status = Response.status(response)
+				if status == 202 {
+					match decode_image!(response) {
+						Ok(image) => PostAccepted(image)
+						Err(error) => PostUncertain(error)
+					}
+				} else if status >= 400 and status <= 499 {
+					PostRejected(UnexpectedStatus({ operation: "import image", status }))
+				} else {
+					PostUncertain(UnexpectedStatus({ operation: "import image", status }))
+				}
+			}
+		}
+	}
+
+	list_private_images_by_tag! = |tag, token| {
+		response = Http.send!(request(GET, "/v2/images?tag_name=${tag}&private=true&per_page=200", token))?
+		if Response.status(response) == 200 {
+			decode_images!(response)
 		} else {
-			unexpected("import image", response)
+			unexpected("list private images by operation tag", response)
 		}
 	}
 
@@ -62,6 +102,17 @@ DigitalOceanApi := [].{
 			decode_image!(response)
 		} else {
 			unexpected("get image", response)
+		}
+	}
+
+	delete_image! = |id, token| {
+		response = Http.send!(request(DELETE, "/v2/images/${U64.to_str(id)}", token))?
+		# Only this account confirming deletion can release local state. A 404 may
+		# mean that the operator supplied a token for the wrong account.
+		if Response.status(response) == 204 {
+			Ok({})
+		} else {
+			unexpected("delete image ${U64.to_str(id)}", response)
 		}
 	}
 
@@ -93,13 +144,32 @@ DigitalOceanApi := [].{
 		}
 	}
 
-	create_droplet! = |name, image_id, ssh_key_id, token| {
-		body = DigitalOcean.droplet_create_body(name, image_id, ssh_key_id)
-		response = Http.send_json!(request(POST, "/v2/droplets", token), body)?
-		if Response.status(response) == 202 {
-			decode_droplet!(response)
+	create_droplet_once! = |name, image_id, ssh_key_id, operation_tag, token| {
+		body = DigitalOcean.droplet_create_body(name, image_id, ssh_key_id, operation_tag)
+		match Http.send_json!(request(POST, "/v2/droplets", token), body) {
+			Err(error) => PostUncertain(error)
+			Ok(response) => {
+				status = Response.status(response)
+				if status == 202 {
+					match decode_droplet!(response) {
+						Ok(droplet) => PostAccepted(droplet)
+						Err(error) => PostUncertain(error)
+					}
+				} else if status >= 400 and status <= 499 {
+					PostRejected(UnexpectedStatus({ operation: "create droplet", status }))
+				} else {
+					PostUncertain(UnexpectedStatus({ operation: "create droplet", status }))
+				}
+			}
+		}
+	}
+
+	list_droplets_by_tag! = |tag, token| {
+		response = Http.send!(request(GET, "/v2/droplets?tag_name=${tag}&per_page=200", token))?
+		if Response.status(response) == 200 {
+			decode_droplets!(response)
 		} else {
-			unexpected("create droplet", response)
+			unexpected("list droplets by tag", response)
 		}
 	}
 
@@ -117,7 +187,7 @@ DigitalOceanApi := [].{
 		if Response.status(response) == 204 {
 			Ok({})
 		} else {
-			unexpected("delete droplet", response)
+			unexpected("delete droplet ${U64.to_str(id)}", response)
 		}
 	}
 }
