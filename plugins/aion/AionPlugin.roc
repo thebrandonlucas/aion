@@ -2,7 +2,7 @@ import parser.Body
 import parser.Bytes
 import kai.Plugin
 
-MachinePlugin := [].{
+AionPlugin := [].{
 	name = "aion"
 
 	basic_cli_name = "F1JVZPYfWP71s8vk6tHcV1Qx1Ef6CZkwswGoCn8VHZmL"
@@ -55,7 +55,7 @@ MachinePlugin := [].{
 			Body.required("packages", StringList),
 		]),
 		config: NamedConfig({ lookup: QualifiedThenUnqualified, name_rules }),
-		config_block: RequiredConfigBlock("machine"),
+		config_block: RequiredConfigBlock("aion-machine"),
 		name: "machine-build",
 	}
 
@@ -119,14 +119,14 @@ MachinePlugin := [].{
 			}
 			directory = ".kai/roc-build"
 			actions = [
-				WriteUtf8({ content: MachinePlugin.render_build_flake({}), path: "${directory}/flake.nix" }),
-				WriteUtf8({ content: MachinePlugin.render_build_nix({}), path: "${directory}/build.nix" }),
+				WriteUtf8({ content: AionPlugin.render_build_flake({}), path: "${directory}/flake.nix" }),
+				WriteUtf8({ content: AionPlugin.render_build_nix({}), path: "${directory}/build.nix" }),
 				WriteUtf8({
 					content: Json.to_str({ name: artifact_name, output, source, system: "x86_64-linux" }),
 					path: "${directory}/build.json",
 				}),
 			]
-				.concat(MachinePlugin.lock_actions(directory))
+				.concat(AionPlugin.lock_actions(directory))
 				.concat([
 					Exec({
 						args: [
@@ -140,7 +140,7 @@ MachinePlugin := [].{
 						command: "nix",
 					}),
 				])
-			Ok(Plugin.RenderResult.{ actions, outputs: [], requests: [], requested_packages: [] })
+			Ok(Plugin.RenderResult.{ actions, artifacts: [], outputs: [], requests: [], requested_packages: [] })
 		},
 		validator: NoValidation,
 	}
@@ -176,7 +176,7 @@ MachinePlugin := [].{
 					args: ["-fL", ".kai/artifacts/aion-init", "${directory}/aion-init"],
 					command: "cp",
 				})
-				actions = [copy_init].concat(MachinePlugin.lock_actions(directory)).concat([
+				actions = [copy_init].concat(AionPlugin.lock_actions(directory)).concat([
 					Exec({
 						args: [
 							"build",
@@ -192,7 +192,8 @@ MachinePlugin := [].{
 				Ok(
 					Plugin.RenderResult.{
 						actions,
-						outputs: [{ name: "flake", text: MachinePlugin.render_machine_flake(system, provider, model) }],
+						artifacts: [],
+						outputs: [{ name: "flake", text: AionPlugin.render_machine_flake(system, provider, model) }],
 						requests: [],
 						requested_packages: [],
 					},
@@ -226,28 +227,28 @@ MachinePlugin := [].{
 			"  pkgs = builtins.getAttr config.system flake.legacyPackages;",
 			"  source = pkgs.nix-gitignore.gitignoreFilterRecursiveSource (_: _: true) \".git\\n.kai\" ../..;",
 			"  platform = pkgs.fetchurl {",
-			"    url = \"${MachinePlugin.basic_cli_url}\";",
-			"    hash = \"${MachinePlugin.basic_cli_hash}\";",
+			"    url = \"${AionPlugin.basic_cli_url}\";",
+			"    hash = \"${AionPlugin.basic_cli_hash}\";",
 			"  };",
 			"  rocHttp = pkgs.fetchurl {",
-			"    url = \"${MachinePlugin.roc_http_url}\";",
-			"    hash = \"${MachinePlugin.roc_http_hash}\";",
+			"    url = \"${AionPlugin.roc_http_url}\";",
+			"    hash = \"${AionPlugin.roc_http_hash}\";",
 			"  };",
 			"in pkgs.runCommand (\"aion-build-\" + config.name) {",
 			"  nativeBuildInputs = [ pkgs.rocpkgs.nightly pkgs.llvmPackages.bintools ];",
 			"} ''",
-			"  cp -R ${MachinePlugin.nix_interpolation("source")}/. .",
+			"  cp -R ${AionPlugin.nix_interpolation("source")}/. .",
 			"  chmod -R u+w .",
-			"  cp ${MachinePlugin.nix_interpolation("platform")} ${MachinePlugin.basic_cli_name}.tar.zst",
-			"  cp ${MachinePlugin.nix_interpolation("rocHttp")} ${MachinePlugin.roc_http_name}.tar.zst",
-			"  roc unbundle ${MachinePlugin.basic_cli_name}.tar.zst",
-			"  roc unbundle ${MachinePlugin.roc_http_name}.tar.zst",
-			"  substituteInPlace ${MachinePlugin.basic_cli_name}/main.roc --replace-fail '${MachinePlugin.roc_http_url}' \"$PWD/${MachinePlugin.roc_http_name}/main.roc\"",
-			"  substituteInPlace ${MachinePlugin.nix_interpolation("config.source")} --replace-fail '${MachinePlugin.basic_cli_url}' \"$PWD/${MachinePlugin.basic_cli_name}/main.roc\"",
+			"  cp ${AionPlugin.nix_interpolation("platform")} ${AionPlugin.basic_cli_name}.tar.zst",
+			"  cp ${AionPlugin.nix_interpolation("rocHttp")} ${AionPlugin.roc_http_name}.tar.zst",
+			"  roc unbundle ${AionPlugin.basic_cli_name}.tar.zst",
+			"  roc unbundle ${AionPlugin.roc_http_name}.tar.zst",
+			"  substituteInPlace ${AionPlugin.basic_cli_name}/main.roc --replace-fail '${AionPlugin.roc_http_url}' \"$PWD/${AionPlugin.roc_http_name}/main.roc\"",
+			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace-fail '${AionPlugin.basic_cli_url}' \"$PWD/${AionPlugin.basic_cli_name}/main.roc\"",
 			# Apps that do not declare the http package have nothing to substitute.
-			"  substituteInPlace ${MachinePlugin.nix_interpolation("config.source")} --replace '${MachinePlugin.roc_http_url}' \"$PWD/${MachinePlugin.roc_http_name}/main.roc\"",
-			"  roc build ${MachinePlugin.nix_interpolation("config.source")} --opt=size --output=${MachinePlugin.nix_interpolation("config.output")}",
-			"  install -Dm755 ${MachinePlugin.nix_interpolation("config.output")} $out",
+			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace '${AionPlugin.roc_http_url}' \"$PWD/${AionPlugin.roc_http_name}/main.roc\"",
+			"  roc build ${AionPlugin.nix_interpolation("config.source")} --opt=size --output=${AionPlugin.nix_interpolation("config.output")}",
+			"  install -Dm755 ${AionPlugin.nix_interpolation("config.output")} $out",
 			"''",
 		],
 		"\n",
@@ -255,7 +256,7 @@ MachinePlugin := [].{
 
 	render_machine_flake : Str, Str, Str -> Str
 	render_machine_flake = |system, provider, model| {
-		aion_init = MachinePlugin.nix_interpolation("aionInit")
+		aion_init = AionPlugin.nix_interpolation("aionInit")
 		Str.join_with(
 			[
 				"{",
@@ -267,7 +268,7 @@ MachinePlugin := [].{
 				"      pkgs = nixpkgs.legacyPackages.\"${system}\";",
 				"      initBinary = ./aion-init;",
 				"      aionInit = pkgs.runCommand \"aion-init\" {} ''",
-				"        install -Dm755 ${MachinePlugin.nix_interpolation("initBinary")} $out/bin/aion-init",
+				"        install -Dm755 ${AionPlugin.nix_interpolation("initBinary")} $out/bin/aion-init",
 				"      '';",
 				"      kaiPackage = kai.packages.\"${system}\".kai;",
 				"      machine = nixpkgs.lib.nixosSystem {",

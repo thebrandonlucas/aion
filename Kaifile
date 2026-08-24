@@ -5,11 +5,11 @@ environment roc {
 
 task format {
   environment: "roc"
-  run: ["roc", "fmt", "plugins/aion/MachinePlugin.roc", "src/aion-init.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc"]
+  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc"]
 }
 
 environment cli {
-  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "openssh"]
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "openssh", "coreutils", "awscli2"]
   overlays: ["github:thebrandonlucas/roc-overlay"]
 }
 
@@ -25,7 +25,11 @@ build aion-init {
   output: "aion-init"
 }
 
-machine agent {
+workflow prepare {
+  steps: ["build aion-init", "build aion", "machine-build agent"]
+}
+
+aion-machine agent {
   system: "x86_64-linux"
   region: "nyc3"
   size: "s-2vcpu-4gb"
