@@ -327,6 +327,7 @@ AionPlugin := [].{
 				"in",
 				"{",
 				"  imports = [ (modulesPath + \"/virtualisation/digital-ocean-config.nix\") ];",
+				"  image.efiSupport = false;",
 				"  virtualisation.digitalOcean.setSshKeys = false;",
 				"  users.mutableUsers = false;",
 				"  # Credentials are injected from DigitalOcean metadata at first boot, never baked into the image.",
