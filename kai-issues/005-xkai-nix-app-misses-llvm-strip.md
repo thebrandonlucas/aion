@@ -5,7 +5,7 @@
 Kai 0.0.5's `xkai` app compiles a valid custom plugin, then fails while stripping the generated binary:
 
 ```console
-$ nix run github:thebrandonlucas/kai#xkai -- build plugins/aion/MachinePlugin.roc
+$ nix run github:thebrandonlucas/kai#xkai -- build plugins/aion/AionPlugin.roc
 0 errors and 0 warnings found ... while successfully building
 Program exited with error: FailedToGetExitCode({ ... program: OsStr.utf8("llvm-strip") ... err: NotFound })
 ```

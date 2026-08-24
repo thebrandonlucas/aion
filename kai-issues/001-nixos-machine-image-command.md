@@ -28,6 +28,6 @@ machine agent {
 
 The Nix backend should render a NixOS module/flake, build a named machine artifact, record its target architecture and closure, and expose it to deployment/snapshot plugins without requiring user-authored Nix. Unsupported host capabilities should fail explicitly.
 
-## Project decision
+## Resolution
 
-Do not hide a direct `nix build` or `nixos-anywhere` command in a shell task. Implementation is blocked until this is added to Kai or implemented as a proper project Kai plugin with the same typed boundary.
+Resolved in Kai 0.0.5. Aion now uses the standard `machine agent` block and `image agent` command. Its plugin emits only the Aion-specific service module consumed by that image plan.

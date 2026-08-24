@@ -30,8 +30,8 @@ The Nix backend should use systemd credentials or a root/user-owned runtime file
 
 ## Project decision
 
-The snapshot may declare an empty PPQ credential slot, but must never contain the credential. Until Kai supports services/secrets, a project machine plugin must lower these declarations explicitly; no plaintext environment file in source or provider user-data is acceptable.
+The snapshot may declare an empty PPQ credential slot, but must never contain the credential. No plaintext environment file in source or provider user-data is acceptable.
 
 ## Status after the DigitalOcean pivot
 
-Unblocked for the MVP: the `aion` CLI provisions the model key itself over SSH (mode `0600` runtime file, `!cat` resolution in pi's `models.json`), outside Kai. Nothing in the Kaifile or image references a secret value. This issue becomes load-bearing again when the hosted service needs Kai to declare machine secret slots (e.g. `secret ppq-key { provision: runtime }`) or systemd `service` blocks in the `machine` block — at that point the SSH handoff should be replaced by the typed Kai feature.
+Kai 0.0.5 now composes typed services and runtime secret slots into machines. Aion uses that service composition for its host module, but the CLI still provisions the model key over SSH (mode `0600` runtime file, `!cat` resolution in pi's `models.json`) because Kai does not yet perform the operator-to-machine secret handoff. Nothing in the Kaifile or image references a secret value.

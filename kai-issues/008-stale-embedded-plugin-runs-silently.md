@@ -3,7 +3,7 @@
 ## Limitation
 
 The project `./kai` binary embeds the compiled plugin (built once via
-`xkai build plugins/aion/MachinePlugin.roc`). Editing the plugin source and
+`xkai build plugins/aion/AionPlugin.roc`). Editing the plugin source and
 running `./kai build <artifact>` silently re-renders backends with the *old*
 embedded plugin: `.kai/roc-build/build.nix` was regenerated from stale renderer
 code immediately after a plugin edit, with no warning. The only signal was a

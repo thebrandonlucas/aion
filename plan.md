@@ -41,11 +41,11 @@ Defer signup, payment, Aion model metering, the web app, services, subdomains, u
 ## 1. Establish the Kai boundary
 
 1. Add a root `Kaifile` with pinned environments and builds for the local `aion` CLI and remote `aion-init` helper.
-2. Add a small Roc Kai plugin defining the typed `machine agent` block and `machine-build` command.
-3. Have its pure renderer emit the DigitalOcean NixOS image backend into `.kai/`, then let Kai invoke that backend.
+2. Define the host with Kai's standard typed `machine agent` block and build it with the standard `image` command.
+3. Keep a small Roc Kai plugin only for the Aion-specific NixOS service module and the Roc package build preparation that stock Kai cannot yet express.
 4. Build the project Kai binary with `xkai`, following `../kai-blueprint`.
 
-**Stop gate:** if the plugin cannot build the image without checked-in Nix or a shell-task escape hatch, document the missing Kai capability and stop.
+**Stop gate:** if Kai cannot compose the Aion service into its standard image without checked-in Nix or a shell-task escape hatch, document the missing capability and stop.
 
 ## 2. Build the one agent image
 
@@ -59,7 +59,7 @@ The generated NixOS image must:
 - configure pi with the fixed provider/model and resolve its API key from an agent-owned runtime file;
 - contain no model or DigitalOcean credential.
 
-Build the Roc artifacts first, then run `./kai machine-build agent`. Keep the commands separate because Kai workflows cannot yet compose custom plugin commands.
+Run `./kai workflow prepare`. The standard `image agent` plan composes the Aion service and recursively builds `aion-init`; the workflow also builds the local `aion` CLI.
 
 ## 3. Implement the Roc CLI slice
 
@@ -95,7 +95,7 @@ The slice is complete when the exact path in **Goal** succeeds without handwritt
 
 Keep each commit below `+300/-300`, preferably near 50 lines:
 
-1. Kaifile and custom Kai machine command.
+1. Kaifile, standard Kai image, and Aion service configuration.
 2. Remote initialization helper and image configuration.
 3. DigitalOcean image import and polling.
 4. Droplet create/state/destroy.

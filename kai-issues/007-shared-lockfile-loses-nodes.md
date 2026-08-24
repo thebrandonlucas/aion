@@ -4,24 +4,23 @@
 
 The plugin's `lock_actions` write two lock files from one `nix flake lock` run:
 the shared project `kai.lock` and the generated flake's own `flake.lock`, both
-derived from the generated flake's inputs only. Two generated flakes in this
+derived from the generated flake's inputs only. Generated flakes in this
 project have different inputs:
 
 - `.kai/roc-build/flake.nix` inputs: `nixpkgs`, `roc-overlay`
-- `.kai/machines/agent/flake.nix` inputs: `nixpkgs`, `kai`
+- `.kai/services/aion/flake.nix` inputs: `nixpkgs`, `kai`
+- `.kai/images/agent/flake.nix` inputs: `nixpkgs` and project overlays
 
-Running `./kai build aion` (roc-build flake) rewrote `kai.lock` and dropped the
-`kai` node that `.kai/machines/agent` needs; it also bumped the pinned
-`nixpkgs` revision instead of preserving the previously locked one. Running
-`machine-build` afterwards rewrites `kai.lock` again to add `kai` back, so the
-two commands flip-flop the checked-in lockfile and neither state serves both
-flakes.
+Running `./kai build aion` rewrites `kai.lock` for the Roc build. During
+`./kai image agent`, the service plan adds `kai`, then the standard image plan
+drops it again. The generated flake-local locks remain usable, but the checked-in
+shared lock represents only the last planned flake.
 
 ## Reproduction
 
-1. `./kai machine-build agent` (writes kai.lock with a `kai` node).
-2. `./kai build aion` (rewrites kai.lock; `kai` node gone, `nixpkgs` rev changed).
-3. `git diff kai.lock` shows the node loss and unintended input updates.
+1. Run `./kai image agent`.
+2. Compare `.kai/services/aion/flake.lock`, which contains `kai`, with `kai.lock`, which does not.
+3. Run `./kai build aion` and inspect the shared lock again.
 
 ## Suggested fix
 

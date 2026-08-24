@@ -28,6 +28,6 @@ workflow snapshot {
 
 Structured step objects would be safer long term than shell-like strings. Unknown commands and unsupported backend combinations should produce planning diagnostics before effects begin.
 
-## Project decision
+## Resolution
 
-Keep snapshot stages as individually invoked Kai commands until generic workflow composition exists. Do not replace the workflow with a shell script.
+Resolved in Kai 0.0.5. Aion's `workflow prepare` now composes `build aion` with the standard `image agent` command, whose dependency plan invokes the project service and `aion-init` build.

@@ -27,6 +27,8 @@ source basic-cli {
 
 Kai should fetch and verify these before the sandboxed build, expose a stable local path to the build, and include them in lock/provenance data. This is needed for ordinary Roc package/platform dependencies, not only this project.
 
-## Project decision
+## Status after source inputs
 
-Until Kai supports source inputs, the project plugin owns its Roc `build` command and renders a Nix `fetchurl` using the pinned release URL and hash. This preserves a typed Kai boundary and sandboxed build; it does not enable networked builds or place handwritten Nix in the repository.
+Kai 0.0.5 can fetch declared `source` inputs, but one `build.run` argv cannot prepare Roc's platform and package together. `basic-cli` itself references the `roc-http` release URL, so Aion must unpack both archives and rewrite both package references before invoking `roc build`.
+
+The project plugin therefore still owns only this Roc build preparation. Kai would remove the remaining override by supporting ordered build phases/actions or a first-class Roc build that maps package URLs to declared source inputs.
