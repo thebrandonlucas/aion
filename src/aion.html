@@ -59,12 +59,12 @@
         const machine = await request('/api/machines/' + encodeURIComponent(name));
         status.textContent = machine.message;
         if (machine.status === 'active' || machine.status === 'failed' || machine.status === 'expired') {
-          clearInterval(poll);
           button.disabled = false;
+        } else {
+          poll = setTimeout(() => watch(name), 2500);
         }
       } catch (error) {
         status.textContent = error.message;
-        clearInterval(poll);
         button.disabled = false;
       }
     }
@@ -85,7 +85,8 @@
         document.querySelector('#wallet').href = 'lightning:' + payment.bolt11;
         checkout.hidden = false;
         status.textContent = 'Waiting for payment…';
-        poll = setInterval(() => watch(name), 2500);
+        clearTimeout(poll);
+        poll = setTimeout(() => watch(name), 2500);
       } catch (error) {
         status.textContent = error.message;
         button.disabled = false;

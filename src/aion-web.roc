@@ -15,7 +15,13 @@ import "aion.html" as page : List(U8)
 import Everpaid
 import EverpaidApi
 
-Context : { api_key : Str }
+Context : {
+	api_key : Str,
+	digitalocean_token : Str,
+	home : Str,
+	model_api_key : Str,
+	path : Str,
+}
 
 Order : {
 	machine : Str,
@@ -29,15 +35,22 @@ program = { init!, respond!, shutdown! }
 
 orders_root = Path.utf8(".aion/payments")
 
+reservation_path = Path.join(orders_root, "reservation")
+
+require_env! = |name| {
+	value = Env.var_str!(OsStr.utf8(name))?
+	if value.trim().is_empty() Err(EmptyEnvironmentVariable(name)) else Ok(value)
+}
+
 init! : () => Try({ config : Server.Config, context : Context }, _)
 init! = || {
-	api_key = Env.var_str!(OsStr.utf8("EVERPAID_API_KEY"))?
-	if api_key.trim().is_empty() {
-		Err(EmptyEverpaidApiKey)
-	} else {
-		Path.create_all!(orders_root)?
-		Ok({ config: Server.default_config, context: { api_key } })
-	}
+	api_key = require_env!("EVERPAID_API_KEY")?
+	digitalocean_token = require_env!("DIGITALOCEAN_TOKEN")?
+	home = require_env!("HOME")?
+	model_api_key = require_env!("AION_MODEL_API_KEY")?
+	path = require_env!("PATH")?
+	Path.create_all!(orders_root)?
+	Ok({ config: Server.default_config, context: { api_key, digitalocean_token, home, model_api_key, path } })
 }
 
 response = |status, content_type, body|
@@ -89,6 +102,30 @@ invoice_json = |invoice|
 		"{\"name\":\"${invoice.machine}\",\"amountSats\":${invoice.amount_sats.to_str()},\"bolt11\":\"${invoice.bolt11}\"}",
 	)
 
+aion_command = |context, arguments, timeout_ms|
+	Cmd.new_str(".kai/artifacts/aion")
+		.args_str(arguments)
+		.clear_envs()
+		.envs_str([
+			{ name: "AION_MODEL_API_KEY", value: context.model_api_key },
+			{ name: "DIGITALOCEAN_TOKEN", value: context.digitalocean_token },
+			{ name: "EVERPAID_API_KEY", value: context.api_key },
+			{ name: "HOME", value: context.home },
+			{ name: "PATH", value: context.path },
+		])
+		.with_timeout_millis(timeout_ms)
+
+payment_preflight! = |context, name|
+	match aion_command(context, ["payment-preflight", name], 120_000).exec_exit_code!() {
+		Ok(0) => Ok(Bool.True)
+		_ => Ok(Bool.False)
+	}
+
+reserve_payment! = |name| {
+	Path.create_dir!(reservation_path)?
+	Path.write_utf8!(Path.join(reservation_path, "machine"), name)
+}
+
 complete_invoice! = |order, api_key| {
 	if order.payment_id.is_empty() {
 		invoice = EverpaidApi.create_invoice!(order.amount_sats, order.machine, order.reference, api_key) ? |_| CompleteInvoiceFailed
@@ -100,7 +137,8 @@ complete_invoice! = |order, api_key| {
 	}
 }
 
-create_invoice! = |request, { api_key }| {
+create_invoice! = |request, context| {
+	api_key = context.api_key
 	request_body : Server.Body
 	request_body = request.body()
 	body = request_body.with_limit(1024).read_all!() ? |_| CreateInvoiceFailed
@@ -117,6 +155,13 @@ create_invoice! = |request, { api_key }| {
 				order = if Path.exists!(path) ? |_| CreateInvoiceFailed {
 					read_order!(name) ? |_| CreateInvoiceFailed
 				} else {
+					if !(payment_preflight!(context, name) ? |_| CreateInvoiceFailed) {
+						return Ok(json(409, "{\"error\":\"Aion cannot safely accept another machine payment\"}"))
+					}
+					match reserve_payment!(name) {
+						Err(_) => return Ok(json(409, "{\"error\":\"Another machine payment is already reserved\"}"))
+						Ok({}) => {}
+					}
 					seconds = UnixTime.now!().seconds_since_epoch()
 					created = {
 						machine: name,
@@ -137,9 +182,7 @@ create_invoice! = |request, { api_key }| {
 
 finish_provision! = |name, succeeded| {
 	lock = marker_path(name, "provisioning")
-	if succeeded {
-		Path.write_utf8!(marker_path(name, "active"), "")?
-	} else {
+	if !succeeded {
 		Path.write_utf8!(marker_path(name, "failed"), "")?
 	}
 	_ = Path.delete_empty!(lock) ?? {}
@@ -150,7 +193,7 @@ finish_provision! = |name, succeeded| {
 	}
 }
 
-provision! = |order| {
+provision! = |order, context| {
 	lock = marker_path(order.machine, "provisioning")
 	if Path.is_dir!(lock)? {
 		Ok(machine_json("provisioning", "Payment received; machine is provisioning"))
@@ -158,10 +201,8 @@ provision! = |order| {
 		match Path.create_dir!(lock) {
 			Err(_) => Ok(machine_json("provisioning", "Payment received; machine is provisioning"))
 			Ok({}) => {
-				result = Cmd.new_str(".kai/artifacts/aion")
-					.args_str(["create-paid", order.machine])
+				result = aion_command(context, ["create-paid", order.machine], 5_400_000)
 					.env_str("AION_EVERPAID_PAYMENT_ID", order.payment_id)
-					.with_timeout_millis(1_200_000)
 					.exec_exit_code!()
 				match result {
 					Ok(0) => finish_provision!(order.machine, Bool.True)
@@ -172,10 +213,11 @@ provision! = |order| {
 	}
 }
 
-machine_status! = |name, { api_key }| {
+machine_status! = |name, context| {
+	api_key = context.api_key
 	if !valid_name(name) or !Path.exists!(order_path(name))? {
 		Ok(json(404, "{\"error\":\"Machine payment not found\"}"))
-	} else if Path.exists!(Path.utf8(".aion/machines/${name}.json"))? or Path.exists!(marker_path(name, "active"))? {
+	} else if Path.exists!(Path.utf8(".aion/machines/${name}.json"))? {
 		Ok(machine_json("active", "Machine is active"))
 	} else if Path.exists!(marker_path(name, "failed"))? {
 		Ok(machine_json("failed", "Provisioning failed; inspect the Aion server output"))
@@ -191,7 +233,7 @@ machine_status! = |name, { api_key }| {
 				return Err(PaymentDoesNotMatchOrder)
 			}
 			match payment.status {
-				"settled" => provision!(order)
+				"settled" => provision!(order, context)
 				"expired" => Ok(machine_json("expired", "Invoice expired; remove its local payment state to retry"))
 				"failed" => Ok(machine_json("failed", "Payment failed"))
 				_ => Ok(machine_json("pending", "Waiting for payment…"))
