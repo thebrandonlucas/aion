@@ -11,6 +11,9 @@ AionPlugin := [].{
 	roc_http_name = "6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS"
 	roc_http_url = "https://github.com/roc-lang/http/releases/download/1.0.0/${roc_http_name}.tar.zst"
 	roc_http_hash = "sha256-6e+qlQ5y9vds326vAEJFcvppsEumEnMjV6wEU2ePArQ="
+	basic_webserver_name = "42jC1JT3auhHSmv2Ah8mW5F2MXiAakq1UQQ4NQceQjXw"
+	basic_webserver_url = "https://github.com/roc-lang/basic-webserver/releases/download/0.16.0/${basic_webserver_name}.tar.zst"
+	basic_webserver_hash = "sha256-tujSbdoP2iOzS9F5oChZFYFVprR7Z88yLKv7fT0RIn0="
 
 	name_rules : List(Plugin.TextRule)
 	name_rules = [
@@ -270,6 +273,10 @@ AionPlugin := [].{
 			"    url = \"${AionPlugin.roc_http_url}\";",
 			"    hash = \"${AionPlugin.roc_http_hash}\";",
 			"  };",
+			"  basicWebserver = pkgs.fetchurl {",
+			"    url = \"${AionPlugin.basic_webserver_url}\";",
+			"    hash = \"${AionPlugin.basic_webserver_hash}\";",
+			"  };",
 			"in pkgs.runCommand (\"aion-build-\" + config.name) {",
 			"  nativeBuildInputs = [ pkgs.rocpkgs.nightly pkgs.llvmPackages.bintools ];",
 			"} ''",
@@ -277,10 +284,14 @@ AionPlugin := [].{
 			"  chmod -R u+w .",
 			"  cp ${AionPlugin.nix_interpolation("platform")} ${AionPlugin.basic_cli_name}.tar.zst",
 			"  cp ${AionPlugin.nix_interpolation("rocHttp")} ${AionPlugin.roc_http_name}.tar.zst",
+			"  cp ${AionPlugin.nix_interpolation("basicWebserver")} ${AionPlugin.basic_webserver_name}.tar.zst",
 			"  roc unbundle ${AionPlugin.basic_cli_name}.tar.zst",
 			"  roc unbundle ${AionPlugin.roc_http_name}.tar.zst",
+			"  roc unbundle ${AionPlugin.basic_webserver_name}.tar.zst",
 			"  substituteInPlace ${AionPlugin.basic_cli_name}/main.roc --replace-fail '${AionPlugin.roc_http_url}' \"$PWD/${AionPlugin.roc_http_name}/main.roc\"",
-			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace-fail '${AionPlugin.basic_cli_url}' \"$PWD/${AionPlugin.basic_cli_name}/main.roc\"",
+			"  substituteInPlace ${AionPlugin.basic_webserver_name}/main.roc --replace-fail '${AionPlugin.roc_http_url}' \"$PWD/${AionPlugin.roc_http_name}/main.roc\"",
+			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace '${AionPlugin.basic_cli_url}' \"$PWD/${AionPlugin.basic_cli_name}/main.roc\"",
+			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace '${AionPlugin.basic_webserver_url}' \"$PWD/${AionPlugin.basic_webserver_name}/main.roc\"",
 			# Apps that do not declare the http package have nothing to substitute.
 			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace '${AionPlugin.roc_http_url}' \"$PWD/${AionPlugin.roc_http_name}/main.roc\"",
 			"  roc build ${AionPlugin.nix_interpolation("config.source")} --opt=size --output=${AionPlugin.nix_interpolation("config.output")}",

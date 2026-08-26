@@ -31,4 +31,4 @@ Kai should fetch and verify these before the sandboxed build, expose a stable lo
 
 Kai 0.0.5 can fetch declared `source` inputs, but one `build.run` argv cannot prepare Roc's platform and package together. `basic-cli` itself references the `roc-http` release URL, so Aion must unpack both archives and rewrite both package references before invoking `roc build`.
 
-The project plugin therefore still owns only this Roc build preparation. Kai would remove the remaining override by supporting ordered build phases/actions or a first-class Roc build that maps package URLs to declared source inputs.
+The project plugin therefore still owns only this Roc build preparation. The Everpaid demo also needs `basic-webserver`, so each new Roc platform currently requires another hard-coded fetch, unpack, and URL rewrite in that plugin. Kai would remove the remaining override by supporting ordered build phases/actions or a first-class Roc build that maps package URLs to declared source inputs.
