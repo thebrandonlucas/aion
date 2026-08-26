@@ -228,6 +228,8 @@ machine_status! = |name, context| {
 		Ok(machine_json("failed", "Provisioning failed; inspect the Aion server output"))
 	} else if Path.is_dir!(marker_path(name, "provisioning"))? {
 		Ok(machine_json("provisioning", "Payment received; machine is provisioning"))
+	} else if Path.is_dir!(marker_path(name, "consumed"))? {
+		Ok(machine_json("consumed", "This payment has already been used"))
 	} else {
 		order = read_order!(name)?
 		if order.payment_id.is_empty() {

@@ -679,6 +679,10 @@ create_paid! = |name| {
 			or !Everpaid.reference_matches_machine(payment.reference, name) {
 		Err(PaymentNotAuthorized)
 	} else {
+		consumed = Path.utf8(".aion/payments/${name}.consumed")
+		Path.create_all!(Path.utf8(".aion/payments"))?
+		Path.create_dir!(consumed)?
+		Path.write_utf8!(Path.join(consumed, "payment-id"), payment_id)?
 		create!(name, Bool.True)
 	}
 }

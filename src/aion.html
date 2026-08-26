@@ -58,7 +58,7 @@
       try {
         const machine = await request('/api/machines/' + encodeURIComponent(name));
         status.textContent = machine.message;
-        if (machine.status === 'active' || machine.status === 'failed' || machine.status === 'expired') {
+        if (machine.status === 'active' || machine.status === 'failed' || machine.status === 'expired' || machine.status === 'consumed') {
           button.disabled = false;
         } else {
           poll = setTimeout(() => watch(name), 2500);
