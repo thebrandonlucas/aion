@@ -49,7 +49,7 @@ unset AWS_SESSION_TOKEN
 # Remove Spaces credentials before provisioning the agent.
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 
-# Create the demo Droplet and enroll the short-lived model key.
+# Create the Droplet and provision writable Pi config plus the short-lived model key.
 ./.kai/artifacts/aion create demo
 
 # Verify interactive SSH, then exit the remote shell.
@@ -70,7 +70,7 @@ unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 
 The commands prompt before importing an image, creating a Droplet, or deleting an image. The older `image import <https-url>` flow remains available for an operator-hosted URL.
 
-`create` registers `~/.ssh/id_ed25519.pub`, boots the fixed `s-2vcpu-4gb` size in fixed region `nyc3`, and enrolls the model key over SSH. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
+`create` registers `~/.ssh/id_ed25519.pub`, boots the fixed `s-2vcpu-4gb` size in fixed region `nyc3`, then provisions the model key and user-owned Pi configuration over SSH. Model choices are runtime state, not part of the shared image. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
 
 ## Cost and secret safety
 
@@ -82,6 +82,6 @@ The commands prompt before importing an image, creating a Droplet, or deleting a
 - Local import uploads a uniquely named `aion-imports/` object with `public-read` ACL into the otherwise private Space. An uncertain upload is retained. After the image POST, the object is deleted immediately only for a definitive `4xx` rejection; unresolved/uncertain outcomes retain it. An accepted object is deleted normally only after image availability is confirmed. `.aion/image.pending/` retains non-secret operation status, the operation tag, Space/key details, and any known image ID when recovery is needed. `image delete` falls back to a pending image ID only when `.aion/image.json` is absent; a corrupt saved image file stops deletion. Pending state remains after image deletion for source-object recovery. Inspect the recorded resources, let the lifecycle rule clean a stale object if needed, and remove the guard only after both providers are resolved.
 - Any activation, SSH, key-enrollment, provisioning-state write, or machine-state save failure before create completes triggers one best-effort DELETE. If deletion is not confirmed, the error prints the Droplet ID and operation tag and retains the global guard for manual cleanup.
 - Machine names are validated as 1-63-character lowercase ASCII DNS labels before create, shell, or destroy uses them. `destroy` retains local state and prints the Droplet ID and operation tag when deletion is not confirmed. Imported images and `aion-<name>` SSH keys remain after successful destroy and are reported for cleanup.
-- Use only a public HTTPS image URL with no embedded credentials. DigitalOcean, model, and Spaces credentials are accepted only through the environment variables shown above. Their values are never command arguments, logs, `.aion/` state, images, or API payloads; Aion removes any inherited `AWS_SESSION_TOKEN` when invoking `aws`. Model-key transfer uses a private OS temporary directory and deletes it best-effort.
+- Use only a public HTTPS image URL with no embedded credentials. DigitalOcean, model, and Spaces credentials are accepted only through the environment variables shown above. Their values are never command arguments, logs, `.aion/` state, images, or API payloads; Aion removes any inherited `AWS_SESSION_TOKEN` when invoking `aws`. Agent configuration and model-key transfer use a private OS temporary directory, install mode-`0600` user files, and delete local staging best-effort.
 
 Non-secret state lives under `.aion/`.

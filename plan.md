@@ -56,8 +56,8 @@ The generated NixOS image must:
 - expose only SSH;
 - install the Kai and pi versions pinned by the Kaifile;
 - install `aion-init`;
-- configure pi with the fixed provider/model and resolve its API key from an agent-owned runtime file;
-- contain no model or DigitalOcean credential.
+- contain no per-user Pi configuration or credential;
+- accept writable Pi configuration and the model key through runtime provisioning.
 
 Run `./kai workflow prepare`. The standard `image agent` plan composes the Aion service and recursively builds `aion-init`; the workflow also builds the local `aion` CLI.
 
@@ -67,9 +67,9 @@ Implement only the API and process operations needed by the five commands:
 
 1. `image import` submits the Kai-built compressed image URL to DigitalOcean, polls until ready, and records its image ID. Hosting/uploading the image is an operator prerequisite for this slice.
 2. `create` validates the name and inputs, registers/deduplicates the SSH key, creates a Droplet from that image, polls for an address, and saves non-secret state.
-3. After SSH is ready, `create` pipes `AION_MODEL_API_KEY` over SSH stdin to `aion-init`. The helper atomically writes it mode `0600`; it never appears in image data, API payloads, arguments, logs, or local state.
+3. After SSH is ready, `create` stages `AION_MODEL_API_KEY` plus the fixed MVP Pi model/settings JSON in a private local directory and transfers them over SSH. `aion-init` installs writable mode-`0600` user files; the key never appears in image data, JSON, API payloads, arguments, logs, or local state.
 4. `shell` replaces the local process with interactive SSH.
-5. `shell pi` replaces it with TTY-enabled SSH running pi with the pinned provider/model.
+5. `shell pi` replaces it with TTY-enabled SSH running pi from the provisioned user settings.
 6. `destroy` deletes the Droplet and local state, and reports enough IDs to clean up manually if deletion fails.
 
 Errors must include the failed operation and provider status without printing tokens, keys, or response bodies that may contain them.
