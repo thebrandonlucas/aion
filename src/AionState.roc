@@ -137,6 +137,7 @@ AionState := [].{
 		}
 	}
 
+	save_machine! : MachineState => Try({}, _)
 	save_machine! = |state| {
 		Path.create_all!(Path.utf8(".aion/machines"))?
 		Path.write_utf8!(machine_path(state.name), Json.to_str(state))
