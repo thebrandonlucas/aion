@@ -674,9 +674,14 @@ create_paid! = |name| {
 	payment_id = require_nonempty_env!("AION_EVERPAID_PAYMENT_ID", "paid creates may only come from the Aion web server")?
 	everpaid_key = require_nonempty_env!("EVERPAID_API_KEY", "needed to verify settlement")?
 	payment = EverpaidApi.get_payment!(payment_id, everpaid_key)?
+	saved_order : Try({ payment_id : Str, reference : Str }, _)
+	saved_order = Json.parse(Path.read_utf8!(Path.utf8(".aion/payments/${name}.json"))?)
+	order = saved_order?
 	if payment.status != "settled"
 		or payment.amountSats != Everpaid.machine_price_sats
-			or !Everpaid.reference_matches_machine(payment.reference, name) {
+			or order.payment_id != payment.id
+				or order.reference != payment.reference
+					or !Everpaid.reference_matches_machine(payment.reference, name) {
 		Err(PaymentNotAuthorized)
 	} else {
 		consumed = Path.utf8(".aion/payments/${name}.consumed")
