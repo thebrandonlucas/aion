@@ -199,7 +199,12 @@ provision! = |order, context| {
 		Ok(machine_json("provisioning", "Payment received; machine is provisioning"))
 	} else {
 		match Path.create_dir!(lock) {
-			Err(_) => Ok(machine_json("provisioning", "Payment received; machine is provisioning"))
+			Err(_) =>
+				if Path.is_dir!(lock) ?? Bool.False {
+					Ok(machine_json("provisioning", "Payment received; machine is provisioning"))
+				} else {
+					Err(ProvisionLockFailed)
+				}
 			Ok({}) => {
 				result = aion_command(context, ["create-paid", order.machine], 5_400_000)
 					.env_str("AION_EVERPAID_PAYMENT_ID", order.payment_id)

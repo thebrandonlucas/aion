@@ -74,7 +74,7 @@ The commands prompt before importing an image, creating a Droplet, or deleting a
 
 ## Test Everpaid checkout
 
-This branch includes a localhost-only payment page. It creates a fixed 10-sat Everpaid Lightning invoice, polls the payment record from the Roc backend, and runs the guarded Aion create flow only after Everpaid reports `settled`. This price is for integration testing and does not cover the DigitalOcean cost.
+This branch includes a localhost-only payment page. It creates a fixed 10-sat Everpaid Lightning invoice, polls the payment record from the Roc backend, and runs the guarded Aion create flow only after Everpaid reports `settled`. Keep the page open because its polling drives reconciliation and provisioning. This price is for integration testing and does not cover the DigitalOcean cost.
 
 From the Everpaid worktree:
 
@@ -92,7 +92,9 @@ set +a
 
 Open <http://127.0.0.1:8000>. The page never receives `EVERPAID_API_KEY`; it calls the local Roc server, which uses the bearer key against `https://everpaid.app/api/v1`.
 
-The worktree still needs normal Aion image state and all create credentials. If the sibling worktree already has an imported image, its non-secret `.aion/image.json` can be copied here before starting. Everpaid order state is retained under `.aion/payments/`. Before deleting an expired order file to reuse a name, confirm its invoice did not settle. A settled invoice removes the interactive create confirmation, so paying it can immediately start DigitalOcean billing.
+The worktree still needs normal Aion image state and all create credentials. If the sibling worktree already has an imported image, its non-secret `.aion/image.json` can be copied here before starting. Before issuing an invoice, the server checks local and DigitalOcean capacity and atomically reserves the demo's single payment slot. It rechecks payment ID, machine reference, amount, and settlement immediately before provisioning.
+
+Everpaid order state and the global reservation are retained under `.aion/payments/`. Before deleting an expired order to reuse the demo, confirm its invoice did not settle. A failed or interrupted provisioning attempt intentionally requires manual inspection of `.aion/create.pending/`, DigitalOcean, and its payment markers before retrying; never clear a `provisioning` or `failed` marker blindly. A settled invoice removes the interactive create confirmation, so paying it can immediately start DigitalOcean billing.
 
 ## Cost and secret safety
 
