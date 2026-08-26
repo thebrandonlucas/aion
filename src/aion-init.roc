@@ -11,6 +11,10 @@ import pf.Stdout
 
 model_key_path = ".config/aion/model-key"
 
+models_path = ".pi/agent/models.json"
+
+settings_path = ".pi/agent/settings.json"
+
 ssh_key_path = "/home/aion/.ssh/authorized_keys"
 
 metadata_path = "/run/do-metadata/v1.json"
@@ -55,6 +59,21 @@ adopt_model_key! = || {
 	}
 }
 
+adopt_agent_config! = || {
+	home = Path.utf8(Env.var_str!(OsStr.utf8("HOME"))?)
+	key = Str.from_utf8(Path.read_bytes!(Path.join(home, "${model_key_path}.new"))?) ? |_| InvalidModelKey
+	models = Path.read_bytes!(Path.join(home, "${models_path}.new"))?
+	settings = Path.read_bytes!(Path.join(home, "${settings_path}.new"))?
+	trimmed = key.trim()
+	if trimmed.is_empty() or models.is_empty() or settings.is_empty() {
+		Err(InvalidAgentConfig)
+	} else {
+		write_private!(Path.join(home, ".pi/agent"), Path.join(home, models_path), models)?
+		write_private!(Path.join(home, ".pi/agent"), Path.join(home, settings_path), settings)?
+		install_model_key!(home, trimmed.to_utf8())
+	}
+}
+
 install_ssh_key! = || {
 	directory = Path.utf8("/home/aion/.ssh")
 	metadata = Path.read_utf8!(Path.utf8(metadata_path))?
@@ -80,7 +99,8 @@ main! = |args| {
 	match commands {
 		["set-model-key"] => set_model_key!()
 		["adopt-model-key"] => adopt_model_key!()
+		["adopt-agent-config"] => adopt_agent_config!()
 		["install-ssh-key"] => install_ssh_key!()
-		_ => Err(InvalidArguments("usage: aion-init set-model-key|adopt-model-key|install-ssh-key"))
+		_ => Err(InvalidArguments("usage: aion-init set-model-key|adopt-model-key|adopt-agent-config|install-ssh-key"))
 	}
 }
