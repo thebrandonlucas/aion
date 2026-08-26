@@ -25,6 +25,7 @@ usage = Str.join_with(
 		"  aion image status",
 		"  aion image delete",
 		"  aion create <name>",
+		"  aion deploy <machine> <artifact> [--project <directory>]",
 		"  aion <name> shell [pi]",
 		"  aion destroy <name>",
 	],
@@ -43,6 +44,16 @@ valid_name = |name| {
 				and is_name_alphanumeric(bytes.get(length - 1) ?? 0)
 					and List.all(bytes, |byte| is_name_alphanumeric(byte) or byte == '-')
 }
+
+is_artifact_byte = |byte|
+	is_name_alphanumeric(byte)
+		or (byte >= 'A' and byte <= 'Z')
+			or byte == '.'
+				or byte == '_'
+					or byte == '-'
+
+valid_artifact = |name|
+	!name.is_empty() and !name.starts_with(".") and List.all(name.to_utf8(), is_artifact_byte)
 
 operation_tag! = |kind|
 	Ok("aion-${kind}-${U64.to_str(Random.seed_u64!()?)}-${U64.to_str(Random.seed_u64!()?)}")
@@ -667,6 +678,72 @@ create! = |name| {
 	}
 }
 
+kai_command! = |operator_directory| {
+	match Env.var_str!(OsStr.utf8("AION_KAI")) {
+		Ok(command) if !command.trim().is_empty() => Ok(command)
+		_ => {
+			project_kai = Path.join(operator_directory, "kai")
+			if Path.is_executable!(project_kai)? {
+				Ok(Path.display(project_kai))
+			} else {
+				Ok("kai")
+			}
+		}
+	}
+}
+
+deploy_in_project! = |kai_command, machine, artifact| {
+	kaifile = Path.utf8("Kaifile")
+	if !Path.is_file!(kaifile)? {
+		return Err(DeploymentKaifileMissing)
+	}
+	deployment = "aion-${artifact}"
+	generated = Path.utf8(".kai/aion-deploy.Kaifile")
+	Path.create_all!(Path.utf8(".kai"))?
+	config = Path.read_utf8!(kaifile)?
+	Path.write_utf8!(
+		generated,
+		"${config}\n\ndeploy ${deployment} {\n  artifact: \"${artifact}\"\n  to: \"ssh://aion@${machine.ip}\"\n}\n",
+	)?
+	result = Cmd.new_str(kai_command)
+		.args_str(["-f", Path.display(generated), "deploy", deployment])
+		.exec_exit_code!()
+	cleanup = Path.delete!(generated)
+	match (result, cleanup) {
+		(Err(error), _) => Err(error)
+		(Ok(_), Err(error)) => Err(error)
+		(Ok(0), Ok({})) => {
+			Stdout.line!("deployed artifact '${artifact}' to machine '${machine.name}'")?
+			Stdout.line!("remote artifact: /home/aion/.local/state/kai/deployments/${deployment}/current")
+		}
+		(Ok(_), Ok({})) => Err(KaiDeploymentFailed)
+	}
+}
+
+deploy! = |machine_name, artifact, project| {
+	if !valid_name(machine_name) {
+		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
+	}
+	if !valid_artifact(artifact) {
+		return Err(InvalidArtifactName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
+	}
+	machine = AionState.read_machine!(machine_name)?
+	operator_directory = Env.cwd!()?
+	kai_command = kai_command!(operator_directory)?
+	project_directory = Path.utf8(project)
+	if !Path.is_dir!(project_directory)? {
+		return Err(DeploymentProjectMissing(project))
+	}
+	Env.set_cwd!(project_directory)?
+	result = deploy_in_project!(kai_command, machine, artifact)
+	restore = Env.set_cwd!(operator_directory)
+	match (result, restore) {
+		(Err(error), _) => Err(error)
+		(Ok({}), Err(error)) => Err(error)
+		(Ok({}), Ok({})) => Ok({})
+	}
+}
+
 shell! = |name, run_pi| {
 	if !valid_name(name) {
 		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
@@ -752,6 +829,8 @@ main! = |args|
 		["image", "status"] => image_status!()
 		["image", "delete"] => image_delete!()
 		["create", name] => create!(name)
+		["deploy", machine, artifact] => deploy!(machine, artifact, ".")
+		["deploy", machine, artifact, "--project", project] => deploy!(machine, artifact, project)
 		[name, "shell"] => shell!(name, Bool.False)
 		[name, "shell", "pi"] => shell!(name, Bool.True)
 		["destroy", name] => destroy!(name)
