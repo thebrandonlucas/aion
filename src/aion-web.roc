@@ -12,6 +12,7 @@ import pf.UnixTime
 import http.Response
 import "aion.html" as page : List(U8)
 
+import Everpaid
 import EverpaidApi
 
 Context : { api_key : Str }
@@ -122,7 +123,7 @@ create_invoice! = |request, { api_key }| {
 						reference: "aion:${name}:${seconds.to_str()}",
 						payment_id: "",
 						bolt11: "",
-						amount_sats: 10,
+						amount_sats: Everpaid.machine_price_sats,
 					}
 					save_order!(created) ? |_| CreateInvoiceFailed
 					created
@@ -186,6 +187,9 @@ machine_status! = |name, { api_key }| {
 			Ok(machine_json("pending", "Invoice creation is incomplete; submit the form again"))
 		} else {
 			payment = EverpaidApi.get_payment!(order.payment_id, api_key)?
+			if payment.amountSats != order.amount_sats or !Everpaid.reference_matches_machine(payment.reference, name) {
+				return Err(PaymentDoesNotMatchOrder)
+			}
 			match payment.status {
 				"settled" => provision!(order)
 				"expired" => Ok(machine_json("expired", "Invoice expired; remove its local payment state to retry"))

@@ -16,6 +16,8 @@ import pf.Stdout
 import AionState
 import DigitalOcean
 import DigitalOceanApi
+import Everpaid
+import EverpaidApi
 
 usage = Str.join_with(
 	[
@@ -629,9 +631,36 @@ create! = |name, payment_authorized| {
 	}
 }
 
+payment_preflight! = |name| {
+	if !valid_name(name) {
+		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
+	}
+	if AionState.has_machine!(name)? {
+		return Err(MachineAlreadyExists("local machine state or a create operation already exists"))
+	}
+	_ = AionState.read_image!()?
+	model_key = require_nonempty_env!("AION_MODEL_API_KEY", "export a short-lived model API key")?
+	_ = model_key
+	home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
+	public_key = Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?.trim()
+	if public_key.is_empty() {
+		return Err(EmptySshPublicKey)
+	}
+	existing = DigitalOceanApi.list_droplets_by_tag!("aion", token!()?)?
+	if List.is_empty(existing) Ok({}) else Err(AionDropletAlreadyExists(resource_ids(existing)))
+}
+
 create_paid! = |name| {
-	_ = require_nonempty_env!("AION_EVERPAID_PAYMENT_ID", "paid creates may only come from the Aion web server")?
-	create!(name, Bool.True)
+	payment_id = require_nonempty_env!("AION_EVERPAID_PAYMENT_ID", "paid creates may only come from the Aion web server")?
+	everpaid_key = require_nonempty_env!("EVERPAID_API_KEY", "needed to verify settlement")?
+	payment = EverpaidApi.get_payment!(payment_id, everpaid_key)?
+	if payment.status != "settled"
+		or payment.amountSats != Everpaid.machine_price_sats
+			or !Everpaid.reference_matches_machine(payment.reference, name) {
+		Err(PaymentNotAuthorized)
+	} else {
+		create!(name, Bool.True)
+	}
 }
 
 shell! = |name, run_pi| {
@@ -731,6 +760,7 @@ main! = |args|
 		["image", "delete"] => image_delete!()
 		["create", name] => create!(name, Bool.False)
 		["create-paid", name] => create_paid!(name)
+		["payment-preflight", name] => payment_preflight!(name)
 		[name, "shell"] => shell!(name, Bool.False)
 		[name, "shell", "pi"] => shell!(name, Bool.True)
 		["destroy", name] => destroy!(name)
