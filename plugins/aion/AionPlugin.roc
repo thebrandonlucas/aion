@@ -334,6 +334,8 @@ AionPlugin := [].{
 				"  users.allowNoPasswordLogin = true;",
 				"  users.users.root.hashedPassword = \"!\";",
 				"  users.users.aion.shell = pkgs.bashInteractive;",
+				"  # Unlock the account for public-key SSH; remote password authentication remains disabled.",
+				"  users.users.aion.hashedPassword = \"\";",
 				"  services.openssh.settings = {",
 				"    PermitRootLogin = \"no\"; PasswordAuthentication = false;",
 				"    KbdInteractiveAuthentication = false;",

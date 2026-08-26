@@ -56,6 +56,7 @@ adopt_model_key! = || {
 }
 
 install_ssh_key! = || {
+	directory = Path.utf8("/home/aion/.ssh")
 	metadata = Path.read_utf8!(Path.utf8(metadata_path))?
 	parsed : Try({ public_keys : List(Str) }, _)
 	parsed = Json.parse(metadata)
@@ -67,7 +68,10 @@ install_ssh_key! = || {
 		[only] if !only.trim().is_empty() => only.trim()
 		_ => return Err(ExpectedOneSshKey)
 	}
-	write_private!(Path.utf8("/home/aion/.ssh"), Path.utf8(ssh_key_path), "${key}\n".to_utf8())?
+	path = Path.utf8(ssh_key_path)
+	write_private!(directory, path, "${key}\n".to_utf8())?
+	Cmd.new_str("chmod").args_str(["0700", Path.display(directory)]).exec_cmd!()?
+	Cmd.new_str("chown").args_str(["aion:users", Path.display(directory), Path.display(path)]).exec_cmd!()?
 	Stdout.line!("SSH key installed")
 }
 
