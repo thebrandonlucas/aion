@@ -1,20 +1,19 @@
-# Bug: workflow project config collides by block name
+# Bug: project configuration descriptors collide by block name
 
-## Limitation
+## Status on Kai master (`a7373bd`)
 
-A standard workflow scans every standard command config shape before planning its steps. A custom `machine-build` command using a named `machine` block therefore collides with the standard `machine` command, even though the CLI command names differ:
+Generic workflow dispatch is implemented, and Aion no longer has the custom machine command that first exposed this bug. The underlying registry collision remains.
 
-```console
-$ ./kai workflow prepare
-Program exited with error: PlanningFailed({ backend: "nix", command: "workflow", ..., message: "unknown field 'region'", plugin: "std" })
+Planning collects project configuration descriptors from every effective command. If two commands or plugins use the same named block with different body shapes, Kai rejects the project before command reachability can disambiguate ownership:
+
+```text
+project config block 'machine' has conflicting body shapes across plugins
 ```
 
-The custom block contains DigitalOcean-specific fields while the standard `machine` shape expects `environment`, `system`, `users`, and `services`.
+## Needed fix
 
-## Suggested feature
+Scope descriptors by owning command/plugin or by commands reachable from the requested plan. A project should be able to register a new producer with its own configuration without changing the schema seen by unrelated standard commands. Ambiguous references must fail explicitly at the point of selection.
 
-Build workflow project config descriptors from the commands actually requested by workflow steps, or otherwise scope config descriptors by owning command/plugin rather than only the config block header.
+## Aion impact
 
-## Resolution
-
-Generic workflow invocation landed in Kai 0.0.5. Aion also removed its custom machine command and now uses the standard `machine` block and `image` command, so the colliding project configuration no longer exists.
+This blocks clean extension commands and encourages projects to shadow standard commands. Removing Aion's plugin avoids its local collision but does not solve the generic composition bug.
