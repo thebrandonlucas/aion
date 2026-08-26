@@ -201,3 +201,82 @@ This is an infrastructure research result, not a reason to bypass the existing K
 25. [Firecracker production host setup](https://github.com/firecracker-microvm/firecracker/blob/main/docs/prod-host-setup.md)
 26. [Cloud Hypervisor introduction](https://www.cloudhypervisor.org/docs/prologue/introduction)
 27. [Hetzner terms: administrator and abuse responsibility](https://www.hetzner.com/legal/terms-and-conditions)
+
+# Research: runtime PPQ model selection
+
+## Question
+
+How should users choose a curated subset of PPQ models before deployment and change that selection later without rebuilding the shared NixOS image?
+
+## Findings
+
+The current image makes `models.json` and `settings.json` root-owned symlinks into the Nix store. That is correct for immutable defaults but wrong for per-machine runtime state. Pi expects global model configuration under `~/.pi/agent/`, reloads `models.json` whenever `/model` opens, and supports switching models without restarting. `settings.json` can set the default model and `enabledModels` cycling list.
+
+PPQ exposes an OpenAI-compatible `GET /v1/models` catalog, but an Aion coding-agent allowlist needs more than IDs: Pi benefits from accurate reasoning, input, context-window, output-limit, cost, and compatibility metadata. A dynamic PPQ response can confirm availability, but Aion should own the tested subset and Pi metadata.
+
+### Option 1: bake every allowed model into a writable user config
+
+- Build one immutable catalog template into the image.
+- At first boot, copy it to user-owned `~/.pi/agent/models.json` and `settings.json` instead of symlinking those paths.
+- Let users switch with Pi's `/model` and Ctrl+P.
+
+**Pros:** smallest change; one image; no server; Pi reloads the model file on `/model`.
+
+**Cons:** every user sees the entire Aion subset; no pre-deploy personalization; changing the default externally only affects a new Pi process unless the active user switches with `/model`.
+
+### Option 2: provision a validated selection over SSH
+
+- Store the user's non-secret selection in local Aion state before deployment: enabled model IDs plus one default.
+- Add Aion commands to list the curated catalog and update that selection.
+- During `create`, send a generated configuration alongside the model key, but keep the key in its separate mode-`0600` file.
+- Have `aion-init` validate and atomically write regular, `aion`-owned `models.json` and `settings.json` files.
+- Reuse the same path after deployment with a command such as `aion demo models apply`.
+
+**Pros:** matches the requested upfront workflow; one shared image; no long-running guest server; selection can change later; invalid or untested model IDs are rejected by Roc code.
+
+**Cons:** Aion must maintain a curated catalog and model metadata; an active Pi session still uses `/model` to switch immediately after the catalog changes.
+
+### Option 3: fetch PPQ's catalog dynamically
+
+- Fetch `GET /v1/models` from the local CLI, an Aion control service, or the guest.
+- Filter the result through an Aion allowlist before rendering Pi configuration.
+
+**Pros:** detects additions and removals without shipping a new VM image.
+
+**Cons:** PPQ availability becomes part of provisioning; returned metadata may not fully describe Pi compatibility; silently exposing every PPQ model violates the curated-subset requirement; catalog changes can break reproducibility.
+
+Use this only as availability enrichment around Option 2, not as the source of policy.
+
+### Option 4: privileged configuration service in the guest
+
+A root service could accept authenticated model-selection updates and rewrite root-owned configuration while Pi remains unprivileged.
+
+**Pros:** prevents the `aion` account and its agent from changing the allowed catalog directly; suitable for centrally enforced billing or policy.
+
+**Cons:** adds a daemon, authentication protocol, privilege boundary, update mechanism, and attack surface. If the human and Pi both operate as the same `aion` Unix user, a writable user file cannot distinguish human changes from agent changes.
+
+## Recommendation
+
+Use Option 2 for the MVP, with a small part of Option 3 later:
+
+1. Keep one generic image containing Pi, Kai, `aion-init`, and no user-specific model configuration or secret.
+2. Maintain a versioned, tested PPQ model catalog in Roc.
+3. Let the local Aion CLI save enabled IDs and a default before `create`.
+4. Provision regular user-owned Pi configuration atomically over SSH, separately from the PPQ key.
+5. Add a post-deploy apply command using the same validation and write path.
+6. Let users switch among enabled models inside Pi with `/model`; use `enabledModels` for Ctrl+P cycling.
+7. Optionally query PPQ to report whether curated models are currently available, but never let remote catalog data expand the allowlist automatically.
+
+Do not rebuild or reimport the NixOS image for model choices. Do not put a model key in `models.json`, settings, Aion state, the Nix store, or provider metadata. Continue resolving it from `/home/aion/.config/aion/model-key`.
+
+Before implementation, choose the initial curated model IDs and metadata. Also decide whether user/agent mutability is acceptable; if the agent must be unable to change policy, Option 4 is required.
+
+## Sources
+
+- Pi custom model configuration and live `/model` reload: `/home/blu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/models.md`
+- Pi defaults and model cycling: `/home/blu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/settings.md`
+- Pi model selection commands: `/home/blu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/usage.md`
+- Pi local-process security boundary: `/home/blu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/security.md`
+- [PPQ API documentation](https://ppq.ai/api-docs)
+- Current Aion image configuration: `plugins/aion/AionPlugin.roc`
+- Current runtime handoff: `src/aion.roc`, `src/aion-init.roc`
