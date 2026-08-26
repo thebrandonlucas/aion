@@ -162,10 +162,10 @@ create_invoice! = |request, context| {
 						Err(_) => return Ok(json(409, "{\"error\":\"Another machine payment is already reserved\"}"))
 						Ok({}) => {}
 					}
-					seconds = UnixTime.now!().seconds_since_epoch()
+					unique = UnixTime.now!().nanos_since_epoch()
 					created = {
 						machine: name,
-						reference: "aion:${name}:${seconds.to_str()}",
+						reference: "aion:${name}:${unique.to_str()}",
 						payment_id: "",
 						bolt11: "",
 						amount_sats: Everpaid.machine_price_sats,
@@ -218,7 +218,7 @@ provision! = |order, context| {
 	}
 }
 
-machine_status! = |name, context| {
+machine_status! = |name, context, allow_provision| {
 	api_key = context.api_key
 	if !valid_name(name) or !Path.exists!(order_path(name))? {
 		Ok(json(404, "{\"error\":\"Machine payment not found\"}"))
@@ -240,7 +240,12 @@ machine_status! = |name, context| {
 				return Err(PaymentDoesNotMatchOrder)
 			}
 			match payment.status {
-				"settled" => provision!(order, context)
+				"settled" =>
+					if allow_provision {
+						provision!(order, context)
+					} else {
+						Ok(machine_json("settled", "Payment received; starting provisioning"))
+					}
 				"expired" => Ok(machine_json("expired", "Invoice expired; remove its local payment state to retry"))
 				"failed" => Ok(machine_json("failed", "Payment failed"))
 				_ => Ok(machine_json("pending", "Waiting for payment…"))
@@ -249,14 +254,28 @@ machine_status! = |name, context| {
 	}
 }
 
+same_origin = |request|
+	request.headers().any(
+		|header|
+			(header.name == "origin" or header.name == "Origin") and header.value == "http://127.0.0.1:8000",
+	)
+
 respond! : Server.Request, Context => Try(Server.Outcome, [ServerErr(Str), ..])
 respond! = |request, context| {
+	if request.method() == POST and !same_origin(request) {
+		return Ok(json(403, "{\"error\":\"Same-origin request required\"}"))
+	}
 	result = match (request.method(), request.target()) {
 		(GET, Resource({ raw_path: "/", .. })) => Ok(response(200, "text/html; charset=utf-8", page))
 		(POST, Resource({ raw_path: "/api/machines", .. })) => create_invoice!(request, context)
+		(POST, Resource({ raw_path, .. })) =>
+			match raw_path.split_on("/") {
+				["", "api", "machines", name, "provision"] => machine_status!(name, context, Bool.True)
+				_ => Ok(json(404, "{\"error\":\"Not found\"}"))
+			}
 		(GET, Resource({ raw_path, .. })) =>
 			match raw_path.split_on("/") {
-				["", "api", "machines", name] => machine_status!(name, context)
+				["", "api", "machines", name] => machine_status!(name, context, Bool.False)
 				_ => Ok(json(404, "{\"error\":\"Not found\"}"))
 			}
 		_ => Ok(json(404, "{\"error\":\"Not found\"}"))

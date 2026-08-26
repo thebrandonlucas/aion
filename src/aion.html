@@ -56,7 +56,14 @@
 
     async function watch(name) {
       try {
-        const machine = await request('/api/machines/' + encodeURIComponent(name));
+        let machine = await request('/api/machines/' + encodeURIComponent(name));
+        if (machine.status === 'settled') {
+          machine = await request('/api/machines/' + encodeURIComponent(name) + '/provision', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+          });
+        }
         status.textContent = machine.message;
         if (machine.status === 'active' || machine.status === 'failed' || machine.status === 'expired' || machine.status === 'consumed') {
           button.disabled = false;
@@ -64,8 +71,8 @@
           poll = setTimeout(() => watch(name), 2500);
         }
       } catch (error) {
-        status.textContent = error.message;
-        button.disabled = false;
+        status.textContent = error.message + '; retrying…';
+        poll = setTimeout(() => watch(name), 5000);
       }
     }
 
