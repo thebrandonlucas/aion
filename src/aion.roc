@@ -22,6 +22,7 @@ usage = Str.join_with(
 		"Usage: aion <command>",
 		"  aion image import <https-url>",
 		"  aion image import-local <path>",
+		"  aion image status",
 		"  aion image delete",
 		"  aion create <name>",
 		"  aion <name> shell [pi]",
@@ -651,6 +652,17 @@ shell! = |name, run_pi| {
 	Cmd.exec!(OsStr.utf8("ssh"), arguments)
 }
 
+image_status! = || {
+	id = if AionState.has_saved_image!()? {
+		image = AionState.read_image!()?
+		image.id
+	} else {
+		AionState.read_pending_image_id!()?
+	}
+	image = DigitalOceanApi.get_image!(id, token!()?)?
+	Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) is ${image.status}")
+}
+
 image_delete! = || {
 	candidate = if AionState.has_saved_image!()? {
 		image = AionState.read_image!()?
@@ -708,6 +720,7 @@ main! = |args|
 	match args.drop_first(1).map(OsStr.display) {
 		["image", "import", url] => image_import!(url)
 		["image", "import-local", path] => image_import_local!(Path.utf8(path))
+		["image", "status"] => image_status!()
 		["image", "delete"] => image_delete!()
 		["create", name] => create!(name)
 		[name, "shell"] => shell!(name, Bool.False)
