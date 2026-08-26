@@ -386,14 +386,19 @@ poll_droplet! = |auth, id, attempts_left| {
 	}
 }
 
+secretless_command = |program, arguments|
+	Cmd.new_str("env")
+		.args_str(["-u", "EVERPAID_API_KEY", "-u", "DIGITALOCEAN_TOKEN", "-u", "AION_MODEL_API_KEY", program].concat(arguments))
+
 # Cloud-init/metadata key install can lag droplet activation; retry ssh for a
 # bounded window before giving up.
 wait_for_ssh! = |ip, attempts_left| {
 	if attempts_left == 0 {
 		Err(SshNotReady)
 	} else {
-		exit_code = Cmd.new_str("timeout")
-			.args_str([
+		exit_code = secretless_command(
+			"timeout",
+			[
 				"--kill-after=5s",
 				"20s",
 				"ssh",
@@ -407,7 +412,8 @@ wait_for_ssh! = |ip, attempts_left| {
 				"StrictHostKeyChecking=accept-new",
 				"aion@${ip}",
 				"mkdir -p ~/.config/aion",
-			])
+			],
+		)
 			.exec_exit_code!()?
 		if exit_code == 0 {
 			Ok({})
@@ -436,13 +442,20 @@ enroll_model_key! = |ip, model_key| {
 }
 
 enroll_model_key_stage! = |ip, model_key, directory, temporary| {
-	Cmd.new_str("chmod").args_str(["0700", Path.display(directory)]).exec_cmd!()?
+	secretless_command("chmod", ["0700", Path.display(directory)]).exec_cmd!()?
 	Path.write_bytes!(temporary, model_key.trim().to_utf8())?
-	Cmd.new_str("chmod").args_str(["0600", Path.display(temporary)]).exec_cmd!()?
+	secretless_command("chmod", ["0600", Path.display(temporary)]).exec_cmd!()?
 	wait_for_ssh!(ip, 30)?
 	Cmd.exec!(
-		OsStr.utf8("timeout"),
+		OsStr.utf8("env"),
 		[
+			OsStr.utf8("-u"),
+			OsStr.utf8("EVERPAID_API_KEY"),
+			OsStr.utf8("-u"),
+			OsStr.utf8("DIGITALOCEAN_TOKEN"),
+			OsStr.utf8("-u"),
+			OsStr.utf8("AION_MODEL_API_KEY"),
+			OsStr.utf8("timeout"),
 			OsStr.utf8("--kill-after=5s"),
 			OsStr.utf8("30s"),
 			OsStr.utf8("scp"),
@@ -460,8 +473,15 @@ enroll_model_key_stage! = |ip, model_key, directory, temporary| {
 		],
 	)?
 	Cmd.exec!(
-		OsStr.utf8("timeout"),
+		OsStr.utf8("env"),
 		[
+			OsStr.utf8("-u"),
+			OsStr.utf8("EVERPAID_API_KEY"),
+			OsStr.utf8("-u"),
+			OsStr.utf8("DIGITALOCEAN_TOKEN"),
+			OsStr.utf8("-u"),
+			OsStr.utf8("AION_MODEL_API_KEY"),
+			OsStr.utf8("timeout"),
 			OsStr.utf8("--kill-after=5s"),
 			OsStr.utf8("30s"),
 			OsStr.utf8("ssh"),
