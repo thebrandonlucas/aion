@@ -20,27 +20,55 @@ The project plugin adds only Aion's Roc package build and NixOS service configur
 
 `workflow prepare` is the non-billable preparation command. It builds both Roc binaries and the agent image; it does not contact DigitalOcean, Spaces, or model APIs.
 
-## Provision one machine
+## Test the full pipeline
 
 ```sh
-export DIGITALOCEAN_TOKEN=...          # custom-scoped token described above
-export DIGITALOCEAN_SPACE_NAME=...     # the one private Space
-export DIGITALOCEAN_SPACE_REGION=nyc3  # only supported region
-unset AWS_SESSION_TOKEN                 # do not mix temporary AWS credentials with the Spaces key
-export AWS_ACCESS_KEY_ID=...            # limited Spaces key
-export AWS_SECRET_ACCESS_KEY=...        # limited Spaces secret
+# Build the project Kai binary.
+nix run github:thebrandonlucas/kai -- -f Kaifile.bootstrap run bootstrap-kai
 
+# Build the Aion CLI, initializer, and agent image.
+./kai workflow prepare
+
+# Export the credentials in .env to child processes.
+set -a
+source ./.env
+set +a
+
+# Enter Aion's runtime environment with AWS CLI, SSH, and coreutils.
+./kai shell cli
+
+# Avoid mixing AWS temporary credentials with the DigitalOcean Spaces key.
+unset AWS_SESSION_TOKEN
+
+# Upload the image to Spaces and import it into DigitalOcean.
 ./.kai/artifacts/aion image import-local .kai/artifacts/images/agent/result/agent.qcow2
+
+# Confirm the imported image is available before creating a Droplet.
+./.kai/artifacts/aion image status
+
+# Remove Spaces credentials before provisioning the agent.
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-export AION_MODEL_API_KEY=...           # short-lived PPQ key
+
+# Create the demo Droplet and enroll the short-lived model key.
 ./.kai/artifacts/aion create demo
-./.kai/artifacts/aion demo shell        # interactive SSH
-./.kai/artifacts/aion demo shell pi     # pi with the pinned PPQ model
+
+# Verify interactive SSH, then exit the remote shell.
+./.kai/artifacts/aion demo shell
+
+# Run pi remotely and submit one prompt.
+./.kai/artifacts/aion demo shell pi
+
+# Reconnect once to verify the machine remains accessible.
+./.kai/artifacts/aion demo shell
+
+# Delete the billable Droplet.
 ./.kai/artifacts/aion destroy demo
-./.kai/artifacts/aion image delete      # explicit imported-image cleanup
+
+# Delete the imported custom image.
+./.kai/artifacts/aion image delete
 ```
 
-The older `image import <https-url>` flow remains available for an operator-hosted URL.
+The commands prompt before importing an image, creating a Droplet, or deleting an image. The older `image import <https-url>` flow remains available for an operator-hosted URL.
 
 `create` registers `~/.ssh/id_ed25519.pub`, boots the fixed `s-2vcpu-4gb` size in fixed region `nyc3`, and enrolls the model key over SSH. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
 
