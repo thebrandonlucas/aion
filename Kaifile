@@ -5,7 +5,7 @@ environment roc {
 
 task format {
   environment: "roc"
-  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc"]
+  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc"]
 }
 
 environment cli {
@@ -23,6 +23,17 @@ build aion-init {
   environment: roc
   source: "src/aion-init.roc"
   output: "aion-init"
+}
+
+environment web {
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "openssh", "coreutils", "awscli2"]
+  overlays: ["github:thebrandonlucas/roc-overlay"]
+}
+
+build aion-web {
+  environment: web
+  source: "src/aion-web.roc"
+  output: "aion-web"
 }
 
 environment agent {
@@ -44,4 +55,8 @@ machine agent {
 
 workflow prepare {
   steps: ["build aion", "image agent"]
+}
+
+workflow payment-demo {
+  steps: ["build aion", "build aion-web"]
 }

@@ -48,17 +48,17 @@
         "type": "github"
       }
     },
-    "overlay0": {
+    "roc-overlay": {
       "inputs": {
         "nixpkgs": "nixpkgs_2",
         "nixpkgs-darwin": "nixpkgs-darwin"
       },
       "locked": {
-        "lastModified": 1787490136,
-        "narHash": "sha256-OS+SQxm4dJkyRe6ZfXipDoT3V4CRHuxRjLqbYdefEi8=",
+        "lastModified": 1787750198,
+        "narHash": "sha256-BO/i4/IyW4STyiFXP8lBooFqs3g8H0bRAUeBvbUhZCA=",
         "owner": "thebrandonlucas",
         "repo": "roc-overlay",
-        "rev": "da7ebe83cfc4ac0f0c7a63e9b3a5f9b4f849a5d4",
+        "rev": "91373db042aaca0b9f2e82417533d03b42084803",
         "type": "github"
       },
       "original": {
@@ -70,7 +70,7 @@
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
-        "overlay0": "overlay0"
+        "roc-overlay": "roc-overlay"
       }
     }
   },
