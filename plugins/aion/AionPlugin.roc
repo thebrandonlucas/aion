@@ -48,8 +48,6 @@ AionPlugin := [].{
 		argument_policy: AllowArguments,
 		body: Body.object([
 			Body.required("artifact", String),
-			Body.required("provider", String),
-			Body.required("model", String),
 		]),
 		config: NamedConfig({ lookup: QualifiedThenUnqualified, name_rules }),
 		config_block: RequiredConfigBlock("service"),
@@ -174,16 +172,8 @@ AionPlugin := [].{
 				byte_offset: None,
 				message: "validated service configuration is missing 'artifact'",
 			}
-			provider = Body.get_string(context.config, "provider") ? |_| {
-				byte_offset: None,
-				message: "validated service configuration is missing 'provider'",
-			}
-			model = Body.get_string(context.config, "model") ? |_| {
-				byte_offset: None,
-				message: "validated service configuration is missing 'model'",
-			}
-			if service_name != "aion" or artifact_name != "aion-init" or provider != "ppq" or model != "openai/gpt-5.1-codex" {
-				return Err({ byte_offset: None, message: "the MVP supports only the fixed Aion agent service" })
+			if service_name != "aion" or artifact_name != "aion-init" {
+				return Err({ byte_offset: None, message: "the MVP supports only the Aion agent service" })
 			}
 			requests = [{ args: ["build", backend.name, artifact_name], status: "service: build ${artifact_name}" }]
 			if !context.dependencies_resolved {
@@ -200,7 +190,7 @@ AionPlugin := [].{
 			artifact_path = ".kai/artifacts/.services/${service_name}"
 			actions = [
 				WriteUtf8({ content: AionPlugin.render_service_flake({}), path: "${directory}/flake.nix" }),
-				WriteUtf8({ content: AionPlugin.render_service_module(provider, model), path: "${directory}/default.nix" }),
+				WriteUtf8({ content: AionPlugin.render_service_module({}), path: "${directory}/default.nix" }),
 				Exec({ args: ["-fL", build.path, "${directory}/aion-init"], command: "cp" }),
 			]
 				.concat(AionPlugin.lock_actions(directory))
@@ -311,8 +301,8 @@ AionPlugin := [].{
 		"\n",
 	)
 
-	render_service_module : Str, Str -> Str
-	render_service_module = |provider, model| {
+	render_service_module : {} -> Str
+	render_service_module = |_| {
 		aion_init = AionPlugin.nix_interpolation("aionInit")
 		Str.join_with(
 			[
@@ -342,27 +332,9 @@ AionPlugin := [].{
 				"  };",
 				"  networking.firewall.allowedTCPPorts = [ 22 ];",
 				"  environment.systemPackages = [ aionInit kaiPackage ];",
-				"  environment.etc.\"aion/models.json\".text = builtins.toJSON {",
-				"    providers.${provider} = {",
-				"      baseUrl = \"https://api.ppq.ai/v1\"; api = \"openai-completions\";",
-				"      apiKey = \"!cat /home/aion/.config/aion/model-key\";",
-				"      models = [ {",
-				"        id = \"${model}\"; name = \"${model}\"; reasoning = true;",
-				"        input = [ \"text\" \"image\" ];",
-				"        cost = { input = 0; output = 0; cacheRead = 0; cacheWrite = 0; };",
-				"        contextWindow = 200000; maxTokens = 32768;",
-				"      } ];",
-				"    };",
-				"  };",
-				"  environment.etc.\"aion/settings.json\".text = builtins.toJSON {",
-				"    defaultProvider = \"${provider}\"; defaultModel = \"${model}\";",
-				"    enableInstallTelemetry = false; enableUpdateCheck = false;",
-				"  };",
 				"  systemd.tmpfiles.rules = [",
 				"    \"d /home/aion/.pi 0700 aion users - -\"",
 				"    \"d /home/aion/.pi/agent 0700 aion users - -\"",
-				"    \"L+ /home/aion/.pi/agent/models.json - - - - /etc/aion/models.json\"",
-				"    \"L+ /home/aion/.pi/agent/settings.json - - - - /etc/aion/settings.json\"",
 				"  ];",
 				"  systemd.services.aion-ssh-key = {",
 				"    description = \"Install the one DigitalOcean SSH key for Aion\";",
