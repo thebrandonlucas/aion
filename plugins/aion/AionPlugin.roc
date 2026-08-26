@@ -320,6 +320,7 @@ AionPlugin := [].{
 				"  image.efiSupport = false;",
 				"  virtualisation.digitalOcean.setSshKeys = false;",
 				"  users.mutableUsers = false;",
+				"  nix.settings.experimental-features = [ \"nix-command\" \"flakes\" ];",
 				"  # Credentials are injected from DigitalOcean metadata at first boot, never baked into the image.",
 				"  users.allowNoPasswordLogin = true;",
 				"  users.users.root.hashedPassword = \"!\";",
