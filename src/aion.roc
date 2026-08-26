@@ -404,7 +404,7 @@ wait_for_ssh! = |ip, attempts_left| {
 				"-o",
 				"StrictHostKeyChecking=accept-new",
 				"aion@${ip}",
-				"mkdir -p ~/.config/aion",
+				"mkdir -p ~/.config/aion ~/.pi/agent && chmod 0700 ~/.config/aion ~/.pi ~/.pi/agent",
 			])
 			.exec_exit_code!()?
 		if exit_code == 0 {
@@ -418,26 +418,36 @@ wait_for_ssh! = |ip, attempts_left| {
 	}
 }
 
-# The key travels only inside a private OS temporary directory over scp/ssh;
-# never in argv, API payloads, logs, or .aion state. Cleanup runs on all paths.
-enroll_model_key! = |ip, model_key| {
-	directory = Path.join(Env.temp_dir!(), "aion-key-${U64.to_str(Random.seed_u64!()?)}")
-	Path.create_dir!(directory)?
-	temporary = Path.join(directory, "model-key")
-	result = enroll_model_key_stage!(ip, model_key, directory, temporary)
-	delete = Path.delete_all!(directory)
-	match (result, delete) {
-		(Err(error), _) => Err(error)
-		(Ok({}), Err(error)) => Err(error)
-		(Ok({}), Ok({})) => Ok({})
-	}
-}
+render_models_config = ||
+	Json.to_str({
+		providers: {
+			ppq: {
+				api: "openai-completions",
+				apiKey: "!cat /home/aion/.config/aion/model-key",
+				baseUrl: "https://api.ppq.ai/v1",
+				models: [
+					{
+						contextWindow: 200000,
+						cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+						id: "openai/gpt-5.1-codex",
+						input: ["text", "image"],
+						maxTokens: 32768,
+						name: "openai/gpt-5.1-codex",
+						reasoning: Bool.True,
+					},
+				],
+			},
+		},
+	})
 
-enroll_model_key_stage! = |ip, model_key, directory, temporary| {
-	Cmd.new_str("chmod").args_str(["0700", Path.display(directory)]).exec_cmd!()?
-	Path.write_bytes!(temporary, model_key.trim().to_utf8())?
-	Cmd.new_str("chmod").args_str(["0600", Path.display(temporary)]).exec_cmd!()?
-	wait_for_ssh!(ip, 30)?
+render_pi_settings = ||
+	Json.to_str({
+		defaultModel: "openai/gpt-5.1-codex",
+		defaultProvider: "ppq",
+		enableInstallTelemetry: Bool.False,
+	})
+
+copy_agent_file! = |ip, source, destination|
 	Cmd.exec!(
 		OsStr.utf8("timeout"),
 		[
@@ -453,10 +463,40 @@ enroll_model_key_stage! = |ip, model_key, directory, temporary| {
 			OsStr.utf8("ConnectionAttempts=1"),
 			OsStr.utf8("-o"),
 			OsStr.utf8("StrictHostKeyChecking=accept-new"),
-			Path.to_os_str(temporary),
-			OsStr.utf8("aion@${ip}:~/.config/aion/model-key.new"),
+			Path.to_os_str(source),
+			OsStr.utf8("aion@${ip}:${destination}"),
 		],
-	)?
+	)
+
+# The key and user configuration travel only inside a private OS temporary
+# directory over scp/ssh. Cleanup runs on all paths.
+enroll_agent_config! = |ip, model_key| {
+	directory = Path.join(Env.temp_dir!(), "aion-config-${U64.to_str(Random.seed_u64!()?)}")
+	Path.create_dir!(directory)?
+	key_path = Path.join(directory, "model-key")
+	models_path = Path.join(directory, "models.json")
+	settings_path = Path.join(directory, "settings.json")
+	result = enroll_agent_config_stage!(ip, model_key, directory, key_path, models_path, settings_path)
+	delete = Path.delete_all!(directory)
+	match (result, delete) {
+		(Err(error), _) => Err(error)
+		(Ok({}), Err(error)) => Err(error)
+		(Ok({}), Ok({})) => Ok({})
+	}
+}
+
+enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, settings_path| {
+	Cmd.new_str("chmod").args_str(["0700", Path.display(directory)]).exec_cmd!()?
+	Path.write_bytes!(key_path, model_key.trim().to_utf8())?
+	Path.write_utf8!(models_path, render_models_config())?
+	Path.write_utf8!(settings_path, render_pi_settings())?
+	Cmd.new_str("chmod")
+		.args_str(["0600", Path.display(key_path), Path.display(models_path), Path.display(settings_path)])
+		.exec_cmd!()?
+	wait_for_ssh!(ip, 30)?
+	copy_agent_file!(ip, key_path, "~/.config/aion/model-key.new")?
+	copy_agent_file!(ip, models_path, "~/.pi/agent/models.json.new")?
+	copy_agent_file!(ip, settings_path, "~/.pi/agent/settings.json.new")?
 	Cmd.exec!(
 		OsStr.utf8("timeout"),
 		[
@@ -473,7 +513,7 @@ enroll_model_key_stage! = |ip, model_key, directory, temporary| {
 			OsStr.utf8("StrictHostKeyChecking=accept-new"),
 			OsStr.utf8("aion@${ip}"),
 			OsStr.utf8("aion-init"),
-			OsStr.utf8("adopt-model-key"),
+			OsStr.utf8("adopt-agent-config"),
 		],
 	)?
 	Ok({})
@@ -542,7 +582,7 @@ provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag|
 	AionState.record_created!(droplet.id)?
 	active = poll_droplet!(auth, droplet.id, 40)?
 	ip = DigitalOcean.public_ipv4(active) ? |_| DropletPollTimeout
-	enroll_model_key!(ip, model_key)?
+	enroll_agent_config!(ip, model_key)?
 	AionState.save_machine!({ id: active.id, ip, name, operation_tag, ssh_key_id })?
 	Ok(ip)
 }
@@ -637,18 +677,7 @@ shell! = |name, run_pi| {
 		OsStr.utf8("StrictHostKeyChecking=accept-new"),
 		OsStr.utf8("aion@${machine.ip}"),
 	]
-	arguments =
-		if run_pi {
-			[OsStr.utf8("-t")].concat(base).concat([
-				OsStr.utf8("pi"),
-				OsStr.utf8("--provider"),
-				OsStr.utf8("ppq"),
-				OsStr.utf8("--model"),
-				OsStr.utf8("openai/gpt-5.1-codex"),
-			])
-		} else {
-			base
-		}
+	arguments = if run_pi [OsStr.utf8("-t")].concat(base).concat([OsStr.utf8("pi")]) else base
 	Cmd.exec!(OsStr.utf8("ssh"), arguments)
 }
 
