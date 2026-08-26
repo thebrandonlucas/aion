@@ -118,7 +118,7 @@ DigitalOceanApi := [].{
 	register_ssh_key! = |name, public_key, token| {
 		body : { name : Str, public_key : Str }
 		body = { name, public_key }
-		response = Http.send_json!(request(POST, "/v2/ssh_keys", token), body)?
+		response = Http.send_json!(request(POST, "/v2/account/keys", token), body)?
 		match Response.status(response) {
 			201 => {
 				decoded : Try(DigitalOcean.SshKeyResponse, _)
@@ -129,7 +129,7 @@ DigitalOceanApi := [].{
 				}
 			}
 			422 => {
-				list = Http.send!(request(GET, "/v2/ssh_keys", token))?
+				list = Http.send!(request(GET, "/v2/account/keys", token))?
 				if Response.status(list) != 200 {
 					return unexpected("list ssh keys", list)
 				}
