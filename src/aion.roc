@@ -566,7 +566,7 @@ cleanup_created! = |auth, droplet_id, operation_tag, failure| {
 	}
 }
 
-create! = |name| {
+create! = |name, payment_authorized| {
 	if !valid_name(name) {
 		Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
 	} else if AionState.has_machine!(name)? {
@@ -579,7 +579,9 @@ create! = |name| {
 			image = AionState.read_image!()?
 			home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
 			public_key = Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?.trim()
-			confirm_operation!("This creates one s-2vcpu-4gb Droplet in nyc3 and starts hourly billing.", "create ${name}")?
+			if !payment_authorized {
+				confirm_operation!("This creates one s-2vcpu-4gb Droplet in nyc3 and starts hourly billing.", "create ${name}")?
+			}
 			auth = token!()?
 			operation_tag = operation_tag!("droplet")?
 			AionState.begin_creation!(name, operation_tag)?
@@ -625,6 +627,11 @@ create! = |name| {
 			}
 		}
 	}
+}
+
+create_paid! = |name| {
+	_ = require_nonempty_env!("AION_EVERPAID_PAYMENT_ID", "paid creates may only come from the Aion web server")?
+	create!(name, Bool.True)
 }
 
 shell! = |name, run_pi| {
@@ -722,7 +729,8 @@ main! = |args|
 		["image", "import-local", path] => image_import_local!(Path.utf8(path))
 		["image", "status"] => image_status!()
 		["image", "delete"] => image_delete!()
-		["create", name] => create!(name)
+		["create", name] => create!(name, Bool.False)
+		["create-paid", name] => create_paid!(name)
 		[name, "shell"] => shell!(name, Bool.False)
 		[name, "shell", "pi"] => shell!(name, Bool.True)
 		["destroy", name] => destroy!(name)
