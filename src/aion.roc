@@ -553,6 +553,41 @@ enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, s
 	Ok({})
 }
 
+authorize_gump! = |ip, executable| {
+	home = require_env!("HOME", "needed to locate ~/.ssh/gump_aion.pub")?
+	public_key = Path.join(Path.utf8(home), ".ssh/gump_aion.pub")
+	if !Path.is_file!(public_key)? {
+		return Err(MissingGumpPublicKey("generate ~/.ssh/gump_aion and ~/.ssh/gump_aion.pub"))
+	}
+	wait_for_ssh!(ip, 30)?
+	copy_agent_file!(ip, public_key, "~/.config/aion/gump-key.pub")?
+	exit_code = secretless_command(
+		"timeout",
+		[
+			"--kill-after=5s",
+			"30s",
+			"ssh",
+			"-o",
+			"BatchMode=yes",
+			"-o",
+			"ConnectTimeout=10",
+			"aion@${ip}",
+			executable,
+			"service",
+			"authorize",
+			"--root",
+			"/home/aion/.gump",
+			"--username",
+			"aion",
+			"--public-key",
+			"/home/aion/.config/aion/gump-key.pub",
+			"--yes",
+		],
+	)
+		.exec_exit_code!()?
+	if exit_code == 0 Ok({}) else Err(GumpAuthorizationFailed)
+}
+
 delete_reconciled_droplets! = |auth, droplets| {
 	match droplets {
 		[] => Ok({})
@@ -758,18 +793,25 @@ deploy! = |machine_name, artifact, project| {
 	}
 	machine = AionState.read_machine!(machine_name)?
 	operator_directory = Env.cwd!()?
-	kai_command = kai_command!(operator_directory)?
 	project_directory = Path.utf8(project)
 	if !Path.is_dir!(project_directory)? {
 		return Err(DeploymentProjectMissing(project))
 	}
 	Env.set_cwd!(project_directory)?
+	project_root = Env.cwd!()?
+	kai_command = kai_command!(project_root)?
 	result = deploy_in_project!(kai_command, machine, artifact)
 	restore = Env.set_cwd!(operator_directory)
 	match (result, restore) {
 		(Err(error), _) => Err(error)
 		(Ok({}), Err(error)) => Err(error)
-		(Ok({}), Ok({})) => Ok({})
+		(Ok({}), Ok({})) => {
+			if artifact == "gump" {
+				authorize_gump!(machine.ip, "/home/aion/.local/state/kai/deployments/aion-gump/current")
+			} else {
+				Ok({})
+			}
+		}
 	}
 }
 
