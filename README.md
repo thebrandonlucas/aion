@@ -74,17 +74,16 @@ The commands prompt before importing an image, creating a Droplet, or deleting a
 
 ## Test Everpaid checkout
 
-This branch includes a localhost-only payment page. It creates a fixed 10-sat Everpaid Lightning invoice, polls the payment record from the Roc backend, and runs the guarded Aion create flow only after Everpaid reports `settled`. Keep the page open because its polling drives reconciliation and provisioning. This price is for integration testing and does not cover the DigitalOcean cost.
+The localhost-only payment page creates a fixed 10-sat Everpaid Lightning invoice, polls the payment record from the Roc backend, and runs the guarded Aion create flow only after Everpaid reports `settled`. Keep the page open because its polling drives reconciliation and provisioning. This price is for integration testing and does not cover the DigitalOcean cost.
 
-From the Everpaid worktree:
+From the repository root, first complete the image import and status steps above so `.aion/image.json` exists, then run:
 
 ```sh
 ./kai workflow payment-demo
 ./kai shell web
 
-# The separate worktree can reuse the ignored operator environment.
 set -a
-source ../aion/.env
+source ./.env
 set +a
 
 ./.kai/artifacts/aion-web
@@ -92,7 +91,7 @@ set +a
 
 Open <http://127.0.0.1:8000>. The page never receives `EVERPAID_API_KEY`; it calls the local Roc server, which uses the bearer key against `https://everpaid.app/api/v1`.
 
-The worktree still needs normal Aion image state and all create credentials. If the sibling worktree already has an imported image, its non-secret `.aion/image.json` can be copied here before starting. Before issuing an invoice, the server checks local and DigitalOcean capacity and atomically reserves the demo's single payment slot. It rechecks payment ID, machine reference, amount, and settlement immediately before provisioning.
+The server and CLI share non-secret `.aion/` state relative to their current directory. Before issuing an invoice, the server reads `.aion/image.json`, checks local and DigitalOcean capacity, and atomically reserves the demo's single payment slot. A missing image file causes payment preflight to reject the request without creating an invoice. The server rechecks payment ID, machine reference, amount, and settlement immediately before provisioning.
 
 Everpaid order state and the global reservation are retained under `.aion/payments/`. Before deleting an expired order to reuse the demo, confirm its invoice did not settle. A failed or interrupted provisioning attempt intentionally requires manual inspection of `.aion/create.pending/`, DigitalOcean, and its payment markers before retrying; never clear a `provisioning` or `failed` marker blindly. A settled invoice removes the interactive create confirmation, so paying it can immediately start DigitalOcean billing.
 
