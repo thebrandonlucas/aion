@@ -35,6 +35,8 @@ program = { init!, respond!, shutdown! }
 
 orders_root = Path.utf8(".aion/payments")
 
+bitcoin_qr_root = Path.utf8("BITCOIN_QR_ASSETS")
+
 reservation_path = Path.join(orders_root, "reservation")
 
 require_env! = |name| {
@@ -64,6 +66,9 @@ response = |status, content_type, body|
 	)
 
 json = |status, body| response(status, "application/json; charset=utf-8", Str.to_utf8(body))
+
+javascript! = |name|
+	Ok(response(200, "text/javascript; charset=utf-8", Str.to_utf8(Path.read_utf8!(Path.join(bitcoin_qr_root, name))?)))
 
 machine_json = |status, message| json(200, "{\"status\":\"${status}\",\"message\":\"${message}\"}")
 
@@ -282,6 +287,11 @@ respond! = |request, context| {
 	}
 	result = match (request.method(), request.target()) {
 		(GET, Resource({ raw_path: "/", .. })) => Ok(response(200, "text/html; charset=utf-8", page))
+		(GET, Resource({ raw_path: "/bitcoin-qr/bitcoin-qr.esm.js", .. })) => javascript!("bitcoin-qr.esm.js")
+		(GET, Resource({ raw_path: "/bitcoin-qr/p-74bae39c.js", .. })) => javascript!("p-74bae39c.js")
+		(GET, Resource({ raw_path: "/bitcoin-qr/p-a1ecfd5f.js", .. })) => javascript!("p-a1ecfd5f.js")
+		(GET, Resource({ raw_path: "/bitcoin-qr/p-dd3d3ad0.entry.js", .. })) => javascript!("p-dd3d3ad0.entry.js")
+		(GET, Resource({ raw_path: "/bitcoin-qr/index.esm.js", .. })) => javascript!("index.esm.js")
 		(POST, Resource({ raw_path: "/api/machines", .. })) => create_invoice!(request, context)
 		(POST, Resource({ raw_path, .. })) =>
 			match raw_path.split_on("/") {
