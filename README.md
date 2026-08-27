@@ -8,64 +8,37 @@ Ad-hoc NixOS agent machines on DigitalOcean, defined in a `Kaifile` and operated
 2. Create one private, Standard DigitalOcean Space in `nyc3`, with versioning disabled and no public bucket policy or listing.
 3. Create a limited Spaces key with Read/Write/Delete access only to that Space. This is separate from the API token.
 4. With separate bucket-administrator credentials, configure an enabled lifecycle rule that expires the `aion-imports/` prefix after one day and aborts incomplete multipart uploads after one day. Verify the rule with DigitalOcean's [lifecycle instructions](https://docs.digitalocean.com/products/spaces/how-to/configure-lifecycle-rules/). The rule is a fallback for interrupted or uncertain cleanup, not the normal deletion path.
-5. Build through Kai, then enter the declared `cli` environment so `awscli2`, OpenSSH, and timeout are on `PATH`:
+5. Bootstrap the project Kai binary once, then use only Kai commands for operator workflows. Tasks enter their declared runtime environments and a Roc launcher reads the ignored `.env` file:
 
 ```sh
 nix run github:thebrandonlucas/kai -- -f Kaifile.bootstrap run bootstrap-kai
 ./kai workflow prepare
-./kai shell cli
 ```
 
 The project plugin adds only Aion's Roc package build and NixOS service configuration. Kai's standard `image` command composes that service into the machine and produces `.kai/artifacts/images/agent/result/agent.qcow2`.
 
-`workflow prepare` is the non-billable preparation command. It builds both Roc binaries and the agent image; it does not contact DigitalOcean, Spaces, or model APIs.
+`workflow prepare` is the non-billable preparation command. It builds the CLI, environment launcher, initializer, and agent image; it does not contact DigitalOcean, Spaces, Everpaid, or model APIs.
 
 ## Test the full pipeline
 
 ```sh
-# Build the project Kai binary.
+# Build the project Kai binary once.
 nix run github:thebrandonlucas/kai -- -f Kaifile.bootstrap run bootstrap-kai
 
-# Build the Aion CLI, initializer, and agent image.
-./kai workflow prepare
+# Build the CLI and image, import it, then confirm availability.
+./kai workflow import-image
 
-# Export the credentials in .env to child processes.
-set -a
-source ./.env
-set +a
+# Create the demo Droplet and provision Pi configuration.
+./kai run create-demo
 
-# Enter Aion's runtime environment with AWS CLI, SSH, and coreutils.
-./kai shell cli
+# Verify SSH, run Pi, then reconnect.
+./kai run shell-demo
+./kai run shell-pi-demo
+./kai run shell-demo
 
-# Avoid mixing AWS temporary credentials with the DigitalOcean Spaces key.
-unset AWS_SESSION_TOKEN
-
-# Upload the image to Spaces and import it into DigitalOcean.
-./.kai/artifacts/aion image import-local .kai/artifacts/images/agent/result/agent.qcow2
-
-# Confirm the imported image is available before creating a Droplet.
-./.kai/artifacts/aion image status
-
-# Remove Spaces credentials before provisioning the agent.
-unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-
-# Create the Droplet and provision writable Pi config plus the short-lived model key.
-./.kai/artifacts/aion create demo
-
-# Verify interactive SSH, then exit the remote shell.
-./.kai/artifacts/aion demo shell
-
-# Run pi remotely and submit one prompt.
-./.kai/artifacts/aion demo shell pi
-
-# Reconnect once to verify the machine remains accessible.
-./.kai/artifacts/aion demo shell
-
-# Delete the billable Droplet.
-./.kai/artifacts/aion destroy demo
-
-# Delete the imported custom image.
-./.kai/artifacts/aion image delete
+# Delete the billable Droplet and imported custom image.
+./kai run destroy-demo
+./kai run delete-image
 ```
 
 The commands prompt before importing an image, creating a Droplet, or deleting an image. The older `image import <https-url>` flow remains available for an operator-hosted URL.
@@ -76,17 +49,11 @@ The commands prompt before importing an image, creating a Droplet, or deleting a
 
 The localhost-only payment page creates a fixed 10-sat Everpaid Lightning invoice, polls the payment record from the Roc backend, and runs the guarded Aion create flow only after Everpaid reports `settled`. Keep the page open because its polling drives reconciliation and provisioning. This price is for integration testing and does not cover the DigitalOcean cost.
 
-From the repository root, first complete the image import and status steps above so `.aion/image.json` exists, then run:
+From the repository root, import an image if needed, then start the server. `payment-demo` builds its artifacts before running the server:
 
 ```sh
+./kai workflow import-image
 ./kai workflow payment-demo
-./kai shell web
-
-set -a
-source ./.env
-set +a
-
-./.kai/artifacts/aion-web
 ```
 
 Open <http://127.0.0.1:8000>. The page never receives `EVERPAID_API_KEY`; it calls the local Roc server, which uses the bearer key against `https://everpaid.app/api/v1`.
@@ -105,6 +72,6 @@ Everpaid order state and the global reservation are retained under `.aion/paymen
 - Local import uploads a uniquely named `aion-imports/` object with `public-read` ACL into the otherwise private Space. An uncertain upload is retained. After the image POST, the object is deleted immediately only for a definitive `4xx` rejection; unresolved/uncertain outcomes retain it. An accepted object is deleted normally only after image availability is confirmed. `.aion/image.pending/` retains non-secret operation status, the operation tag, Space/key details, and any known image ID when recovery is needed. `image delete` falls back to a pending image ID only when `.aion/image.json` is absent; a corrupt saved image file stops deletion. Pending state remains after image deletion for source-object recovery. Inspect the recorded resources, let the lifecycle rule clean a stale object if needed, and remove the guard only after both providers are resolved.
 - Any activation, SSH, key-enrollment, provisioning-state write, or machine-state save failure before create completes triggers one best-effort DELETE. If deletion is not confirmed, the error prints the Droplet ID and operation tag and retains the global guard for manual cleanup.
 - Machine names are validated as 1-63-character lowercase ASCII DNS labels before create, shell, or destroy uses them. `destroy` retains local state and prints the Droplet ID and operation tag when deletion is not confirmed. Imported images and `aion-<name>` SSH keys remain after successful destroy and are reported for cleanup.
-- Use only a public HTTPS image URL with no embedded credentials. DigitalOcean, model, and Spaces credentials are accepted only through the environment variables shown above. Their values are never command arguments, logs, `.aion/` state, images, or API payloads; Aion removes any inherited `AWS_SESSION_TOKEN` when invoking `aws`. Agent configuration and model-key transfer use a private OS temporary directory, install mode-`0600` user files, and delete local staging best-effort.
+- Use only a public HTTPS image URL with no embedded credentials. The ignored `.env` uses one `KEY=value` entry per line. The Roc task launcher passes only each operation's required DigitalOcean, model, Everpaid, or Spaces credentials and removes unrelated inherited credentials, including `AWS_SESSION_TOKEN`. Values are never command arguments, logs, `.aion/` state, images, or API payloads. Agent configuration and model-key transfer use a private OS temporary directory, install mode-`0600` user files, and delete local staging best-effort.
 
 Non-secret state lives under `.aion/`.
