@@ -5,7 +5,7 @@ environment roc {
 
 task format {
   environment: "roc"
-  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "src/Everpaid.roc", "src/EverpaidApi.roc"]
+  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion-run.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "src/Everpaid.roc", "src/EverpaidApi.roc"]
 }
 
 environment cli {
@@ -17,6 +17,12 @@ build aion {
   environment: cli
   source: "src/aion.roc"
   output: "aion"
+}
+
+build aion-run {
+  environment: cli
+  source: "src/aion-run.roc"
+  output: "aion-run"
 }
 
 build aion-init {
@@ -36,6 +42,46 @@ build aion-web {
   output: "aion-web"
 }
 
+task import-image {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "import-image"]
+}
+
+task image-status {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "image-status"]
+}
+
+task create-demo {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "create-demo"]
+}
+
+task shell-demo {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "shell-demo"]
+}
+
+task shell-pi-demo {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "shell-pi-demo"]
+}
+
+task destroy-demo {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "destroy-demo"]
+}
+
+task delete-image {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "delete-image"]
+}
+
+task payment-server {
+  environment: "web"
+  run: [".kai/artifacts/aion-run", "payment-server"]
+}
+
 environment agent {
   packages: ["git", "pi-coding-agent"]
 }
@@ -52,9 +98,13 @@ machine agent {
 }
 
 workflow prepare {
-  steps: ["build aion", "image agent"]
+  steps: ["build aion", "build aion-run", "image agent"]
+}
+
+workflow import-image {
+  steps: ["build aion", "build aion-run", "image agent", "run import-image", "run image-status"]
 }
 
 workflow payment-demo {
-  steps: ["build aion", "build aion-web"]
+  steps: ["build aion", "build aion-run", "build aion-web", "run payment-server"]
 }
