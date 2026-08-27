@@ -257,7 +257,8 @@ machine_status! = |name, context, allow_provision| {
 same_origin = |request|
 	request.headers().any(
 		|header|
-			(header.name == "origin" or header.name == "Origin") and header.value == "http://127.0.0.1:8000",
+			(header.name == "origin" or header.name == "Origin")
+				and (header.value == "http://127.0.0.1:8000" or header.value == "http://localhost:8000"),
 	)
 
 respond! : Server.Request, Context => Try(Server.Outcome, [ServerErr(Str), ..])
