@@ -6,7 +6,7 @@ AionState := [].{
 	MachineState : { id : U64, ip : Str, name : Str, operation_tag : Str, ssh_key_id : U64 }
 	LegacyImageState : { id : U64, name : Str }
 	LegacyMachineState : { id : U64, ip : Str, name : Str, ssh_key_id : U64 }
-	ProjectImageState : { machine : Str, project : Str }
+	ProjectImageState : { image : Str, machine : Str, project : Str }
 
 	image_path = Path.utf8(".aion/image.json")
 

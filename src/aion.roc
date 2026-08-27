@@ -578,12 +578,18 @@ enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, s
 	Ok({})
 }
 
-valid_ssh_public_key = |key|
-	match key.split_on(" ") {
-		[kind, encoded, ..] =>
-			!encoded.is_empty()
-				and (kind.starts_with("ssh-") or kind.starts_with("ecdsa-") or kind.starts_with("sk-ssh-") or kind.starts_with("sk-ecdsa-"))
-		_ => Bool.False
+ssh_key_identity = |key|
+	match key.split_on(" ").keep_if(|part| !part.is_empty()) {
+		["ssh-ed25519", encoded, ..] if encoded.to_utf8().len() >= 16 and encoded.to_utf8().all(
+			|byte|
+				(byte >= 'a' and byte <= 'z')
+					or (byte >= 'A' and byte <= 'Z')
+						or (byte >= '0' and byte <= '9')
+							or byte == '+'
+								or byte == '/'
+									or byte == '=',
+		) => Some("ssh-ed25519 ${encoded}")
+		_ => None
 	}
 
 gump_public_key! = || {
@@ -595,10 +601,11 @@ gump_public_key! = || {
 		return Err(MissingGumpPublicKey("generate ~/.ssh/gump_aion and ~/.ssh/gump_aion.pub"))
 	}
 	gump_key = Path.read_utf8!(public_key)?.trim()
-	if !valid_ssh_public_key(gump_key) {
+	gump_identity = ssh_key_identity(gump_key)
+	if gump_identity == None {
 		return Err(InvalidGumpPublicKey)
 	}
-	if Path.is_file!(operator_key)? and Path.read_utf8!(operator_key)?.trim() == gump_key {
+	if Path.is_file!(operator_key)? and ssh_key_identity(Path.read_utf8!(operator_key)?.trim()) == gump_identity {
 		return Err(GumpKeyMustBeSeparate("gump_aion.pub must differ from id_ed25519.pub"))
 	}
 	Ok(public_key)
@@ -825,11 +832,15 @@ build_project_image! = |project, machine| {
 	kai_command = kai_command!(project_root)?
 	result = Cmd.new_str(kai_command).args_str(["image", machine]).exec_exit_code!()
 	image = Path.join(project_root, ".kai/artifacts/images/${machine}/result/${machine}.qcow2")
+	identity = match secretless_command("realpath", [Path.display(image)]).exec_output!() {
+		Ok(output) => output.stdout_utf8.trim()
+		Err(_) => ""
+	}
 	restore = Env.set_cwd!(operator_directory)
 	match (result, restore) {
 		(Err(error), _) => Err(error)
 		(Ok(_), Err(error)) => Err(error)
-		(Ok(0), Ok({})) => if Path.is_file!(image)? Ok({ image, project: Path.display(project_root) }) else Err(ProjectImageMissing(Path.display(image)))
+		(Ok(0), Ok({})) => if Path.is_file!(image)? and !identity.is_empty() Ok({ identity, image, project: Path.display(project_root) }) else Err(ProjectImageMissing(Path.display(image)))
 		(Ok(_), Ok({})) => Err(KaiImageBuildFailed)
 	}
 }
@@ -845,12 +856,19 @@ create_project! = |name, project, machine| {
 	built = build_project_image!(project, machine)?
 	if AionState.has_saved_image!()? {
 		saved = AionState.read_project_image!()?
-		if saved.machine != machine or saved.project != built.project {
-			return Err(ProjectImageMismatch("delete the saved image before selecting another project machine"))
+		if saved.machine != machine or saved.project != built.project or saved.image != built.identity {
+			return Err(ProjectImageMismatch("delete the saved image before selecting another project machine or build"))
 		}
 	} else {
-		image_import_local!(built.image)?
-		AionState.save_project_image!({ machine, project: built.project })?
+		match image_import_local!(built.image) {
+			Err(error) => {
+				if AionState.has_saved_image!() ?? Bool.False {
+					AionState.save_project_image!({ image: built.identity, machine, project: built.project }) ?? {}
+				}
+				return Err(error)
+			}
+			Ok({}) => AionState.save_project_image!({ image: built.identity, machine, project: built.project })?
+		}
 	}
 	create!(name, Bool.False, Bool.False)?
 	if machine == "gump" {
