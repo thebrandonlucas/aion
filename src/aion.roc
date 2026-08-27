@@ -769,6 +769,21 @@ deploy! = |machine_name, artifact, project| {
 	}
 }
 
+everpaid_create_invoice! = |name, reference| {
+	if !valid_name(name) or !Everpaid.reference_matches_machine(reference, name) {
+		return Err(InvalidEverpaidInvoiceRequest)
+	}
+	api_key = require_nonempty_env!("EVERPAID_API_KEY", "needed to create an invoice")?
+	invoice = EverpaidApi.create_invoice!(Everpaid.machine_price_sats, name, reference, api_key)?
+	Stdout.line!(Json.to_str(invoice))
+}
+
+everpaid_get_payment! = |id| {
+	api_key = require_nonempty_env!("EVERPAID_API_KEY", "needed to read a payment")?
+	payment = EverpaidApi.get_payment!(id, api_key)?
+	Stdout.line!(Json.to_str(payment))
+}
+
 payment_preflight! = |name| {
 	if !valid_name(name) {
 		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
@@ -903,6 +918,8 @@ main! = |args|
 		["image", "delete"] => image_delete!()
 		["create", name] => create!(name, Bool.False)
 		["create-paid", name] => create_paid!(name)
+		["everpaid-create-invoice", name, reference] => everpaid_create_invoice!(name, reference)
+		["everpaid-get-payment", id] => everpaid_get_payment!(id)
 		["payment-preflight", name] => payment_preflight!(name)
 		["deploy", machine, artifact] => deploy!(machine, artifact, ".")
 		["deploy", machine, artifact, "--project", project] => deploy!(machine, artifact, project)

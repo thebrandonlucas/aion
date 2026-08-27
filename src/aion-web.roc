@@ -8,12 +8,12 @@ import pf.Env
 import pf.OsStr
 import pf.Path
 import pf.Server
+import pf.Stderr
 import pf.UnixTime
 import http.Response
 import "aion.html" as page : List(U8)
 
 import Everpaid
-import EverpaidApi
 
 Context : {
 	api_key : Str,
@@ -121,16 +121,32 @@ payment_preflight! = |context, name|
 		_ => Ok(Bool.False)
 	}
 
+create_everpaid_invoice! = |order, context| {
+	output = aion_command(context, ["everpaid-create-invoice", order.machine, order.reference], 120_000)
+		.exec_output!() ? |_| EverpaidCommandFailed
+	invoice : Try(Everpaid.Invoice, _)
+	invoice = Json.parse(output.stdout_utf8)
+	invoice
+}
+
+get_everpaid_payment! = |id, context| {
+	output = aion_command(context, ["everpaid-get-payment", id], 120_000)
+		.exec_output!() ? |_| EverpaidCommandFailed
+	payment : Try(Everpaid.Payment, _)
+	payment = Json.parse(output.stdout_utf8)
+	payment
+}
+
 reserve_payment! = |name| {
 	Path.create_dir!(reservation_path)?
 	Path.write_utf8!(Path.join(reservation_path, "machine"), name)
 }
 
-complete_invoice! = |order, api_key| {
+complete_invoice! = |order, context| {
 	if order.payment_id.is_empty() {
-		invoice = EverpaidApi.create_invoice!(order.amount_sats, order.machine, order.reference, api_key) ? |_| CompleteInvoiceFailed
+		invoice = create_everpaid_invoice!(order, context)?
 		complete = { ..order, payment_id: invoice.id, bolt11: invoice.bolt11 }
-		save_order!(complete) ? |_| CompleteInvoiceFailed
+		save_order!(complete)?
 		Ok(complete)
 	} else {
 		Ok(order)
@@ -138,7 +154,6 @@ complete_invoice! = |order, api_key| {
 }
 
 create_invoice! = |request, context| {
-	api_key = context.api_key
 	request_body : Server.Body
 	request_body = request.body()
 	body = request_body.with_limit(1024).read_all!() ? |_| CreateInvoiceFailed
@@ -173,7 +188,7 @@ create_invoice! = |request, context| {
 					save_order!(created) ? |_| CreateInvoiceFailed
 					created
 				}
-				invoice = complete_invoice!(order, api_key) ? |_| CreateInvoiceFailed
+				invoice = complete_invoice!(order, context)?
 				Ok(invoice_json(invoice))
 			}
 		}
@@ -219,7 +234,6 @@ provision! = |order, context| {
 }
 
 machine_status! = |name, context, allow_provision| {
-	api_key = context.api_key
 	if !valid_name(name) or !Path.exists!(order_path(name))? {
 		Ok(json(404, "{\"error\":\"Machine payment not found\"}"))
 	} else if Path.exists!(Path.utf8(".aion/machines/${name}.json"))? {
@@ -235,7 +249,7 @@ machine_status! = |name, context, allow_provision| {
 		if order.payment_id.is_empty() {
 			Ok(machine_json("pending", "Invoice creation is incomplete; submit the form again"))
 		} else {
-			payment = EverpaidApi.get_payment!(order.payment_id, api_key)?
+			payment = get_everpaid_payment!(order.payment_id, context)?
 			if payment.amountSats != order.amount_sats or !Everpaid.reference_matches_machine(payment.reference, name) {
 				return Err(PaymentDoesNotMatchOrder)
 			}
@@ -281,7 +295,13 @@ respond! = |request, context| {
 			}
 		_ => Ok(json(404, "{\"error\":\"Not found\"}"))
 	}
-	result.map_err(|error| ServerErr("Request failed: ${Str.inspect(error)}"))
+	match result {
+		Ok(outcome) => Ok(outcome)
+		Err(error) => {
+			_ = Stderr.line!("request failed: ${Str.inspect(error)}") ?? {}
+			Ok(json(500, "{\"error\":\"Server request failed; inspect the Aion server output\"}"))
+		}
+	}
 }
 
 shutdown! : Server.ShutdownReason, Context => Try({}, [Exit(I64), ..])
