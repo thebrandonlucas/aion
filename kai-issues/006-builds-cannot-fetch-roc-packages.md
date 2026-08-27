@@ -12,4 +12,4 @@ Support ordered build actions or a first-class Roc build implementation. Each ac
 
 ## Aion impact
 
-`AionPlugin.roc` still owns `build` only to render these preparation steps. Once stock Kai can express them, both Aion binaries can use the standard build command.
+`AionPlugin.roc` still owns `build` only to render these preparation steps. The Everpaid demo also needs `basic-webserver`, so each new Roc platform currently requires another hard-coded source and URL rewrite in that plugin. Once stock Kai can express ordered build actions or map Roc package URLs to declared inputs, all Aion binaries can use the standard build command.

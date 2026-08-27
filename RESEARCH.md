@@ -1,3 +1,38 @@
+# Research: Everpaid-gated machine creation
+
+## Question
+
+How should a minimal local Aion page take an Everpaid payment before creating a machine without exposing `EVERPAID_API_KEY` in browser JavaScript?
+
+## Findings
+
+### Hosted payment requests
+
+- `POST /api/v1/payment-requests` returns an Everpaid-hosted URL.
+- The returned page ID is not a payment ID, and the API has no endpoint for reading payment-request settlement.
+- Settlement therefore requires a public signed webhook. That is a poor fit for a local-only test page because it requires a tunnel and HMAC-SHA256 verification.
+
+### Raw Lightning invoices
+
+- `POST /api/v1/invoices` returns a payment ID and BOLT11 invoice. Its client `reference` is account-unique and makes retries idempotent.
+- `GET /api/v1/payments/{id}` reports `pending`, `settled`, `expired`, or `failed`.
+- A local Roc backend can retain the API key, create the invoice, and poll settlement. Minimal browser JavaScript only calls the local backend.
+- The backend must persist the payment-to-machine mapping before provisioning. It must also lock provisioning so concurrent browser polls cannot create twice.
+
+## Recommendation
+
+Use a fixed, server-controlled SAT price and the raw-invoice API for this test harness. Serve one inline HTML/CSS/JS page from a Roc `basic-webserver` binary. After Everpaid reports `settled`, invoke Aion's existing guarded create path without its interactive billing prompt, and expose `pending`, `provisioning`, `active`, or `failed` to the page.
+
+This is intentionally a single-operator demo, not an account system. A production service should use authenticated users, signed webhooks plus API reconciliation, durable transactional storage, and a background provisioning worker.
+
+## Sources
+
+- Everpaid OpenAPI document: https://everpaid.app/openapi.json
+- Everpaid API reference: https://everpaid.app/docs
+- Aion create safeguards: `src/aion.roc`
+
+---
+
 # Research: per-user VM infrastructure for Aion
 
 ## Question

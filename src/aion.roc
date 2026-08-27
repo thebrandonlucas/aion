@@ -16,6 +16,8 @@ import pf.Stdout
 import AionState
 import DigitalOcean
 import DigitalOceanApi
+import Everpaid
+import EverpaidApi
 
 usage = Str.join_with(
 	[
@@ -395,14 +397,19 @@ poll_droplet! = |auth, id, attempts_left| {
 	}
 }
 
+secretless_command = |program, arguments|
+	Cmd.new_str("env")
+		.args_str(["-u", "EVERPAID_API_KEY", "-u", "DIGITALOCEAN_TOKEN", "-u", "AION_MODEL_API_KEY", program].concat(arguments))
+
 # Cloud-init/metadata key install can lag droplet activation; retry ssh for a
 # bounded window before giving up.
 wait_for_ssh! = |ip, attempts_left| {
 	if attempts_left == 0 {
 		Err(SshNotReady)
 	} else {
-		exit_code = Cmd.new_str("timeout")
-			.args_str([
+		exit_code = secretless_command(
+			"timeout",
+			[
 				"--kill-after=5s",
 				"20s",
 				"ssh",
@@ -416,7 +423,8 @@ wait_for_ssh! = |ip, attempts_left| {
 				"StrictHostKeyChecking=accept-new",
 				"aion@${ip}",
 				"mkdir -p ~/.config/aion ~/.pi/agent && chmod 0700 ~/.config/aion ~/.pi ~/.pi/agent",
-			])
+			],
+		)
 			.exec_exit_code!()?
 		if exit_code == 0 {
 			Ok({})
@@ -460,8 +468,15 @@ render_pi_settings = ||
 
 copy_agent_file! = |ip, source, destination|
 	Cmd.exec!(
-		OsStr.utf8("timeout"),
+		OsStr.utf8("env"),
 		[
+			OsStr.utf8("-u"),
+			OsStr.utf8("EVERPAID_API_KEY"),
+			OsStr.utf8("-u"),
+			OsStr.utf8("DIGITALOCEAN_TOKEN"),
+			OsStr.utf8("-u"),
+			OsStr.utf8("AION_MODEL_API_KEY"),
+			OsStr.utf8("timeout"),
 			OsStr.utf8("--kill-after=5s"),
 			OsStr.utf8("30s"),
 			OsStr.utf8("scp"),
@@ -497,20 +512,28 @@ enroll_agent_config! = |ip, model_key| {
 }
 
 enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, settings_path| {
-	Cmd.new_str("chmod").args_str(["0700", Path.display(directory)]).exec_cmd!()?
+	secretless_command("chmod", ["0700", Path.display(directory)]).exec_cmd!()?
 	Path.write_bytes!(key_path, model_key.trim().to_utf8())?
 	Path.write_utf8!(models_path, render_models_config())?
 	Path.write_utf8!(settings_path, render_pi_settings())?
-	Cmd.new_str("chmod")
-		.args_str(["0600", Path.display(key_path), Path.display(models_path), Path.display(settings_path)])
-		.exec_cmd!()?
+	secretless_command(
+		"chmod",
+		["0600", Path.display(key_path), Path.display(models_path), Path.display(settings_path)],
+	).exec_cmd!()?
 	wait_for_ssh!(ip, 30)?
 	copy_agent_file!(ip, key_path, "~/.config/aion/model-key.new")?
 	copy_agent_file!(ip, models_path, "~/.pi/agent/models.json.new")?
 	copy_agent_file!(ip, settings_path, "~/.pi/agent/settings.json.new")?
 	Cmd.exec!(
-		OsStr.utf8("timeout"),
+		OsStr.utf8("env"),
 		[
+			OsStr.utf8("-u"),
+			OsStr.utf8("EVERPAID_API_KEY"),
+			OsStr.utf8("-u"),
+			OsStr.utf8("DIGITALOCEAN_TOKEN"),
+			OsStr.utf8("-u"),
+			OsStr.utf8("AION_MODEL_API_KEY"),
+			OsStr.utf8("timeout"),
 			OsStr.utf8("--kill-after=5s"),
 			OsStr.utf8("30s"),
 			OsStr.utf8("ssh"),
@@ -617,7 +640,7 @@ cleanup_created! = |auth, droplet_id, operation_tag, failure| {
 	}
 }
 
-create! = |name| {
+create! = |name, payment_authorized| {
 	if !valid_name(name) {
 		Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
 	} else if AionState.has_machine!(name)? {
@@ -630,7 +653,9 @@ create! = |name| {
 			image = AionState.read_image!()?
 			home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
 			public_key = Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?.trim()
-			confirm_operation!("This creates one s-2vcpu-4gb Droplet in nyc3 and starts hourly billing.", "create ${name}")?
+			if !payment_authorized {
+				confirm_operation!("This creates one s-2vcpu-4gb Droplet in nyc3 and starts hourly billing.", "create ${name}")?
+			}
 			auth = token!()?
 			operation_tag = operation_tag!("droplet")?
 			AionState.begin_creation!(name, operation_tag)?
@@ -744,6 +769,47 @@ deploy! = |machine_name, artifact, project| {
 	}
 }
 
+payment_preflight! = |name| {
+	if !valid_name(name) {
+		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
+	}
+	if AionState.has_machine!(name)? {
+		return Err(MachineAlreadyExists("local machine state or a create operation already exists"))
+	}
+	_ = AionState.read_image!()?
+	model_key = require_nonempty_env!("AION_MODEL_API_KEY", "export a short-lived model API key")?
+	_ = model_key
+	home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
+	public_key = Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?.trim()
+	if public_key.is_empty() {
+		return Err(EmptySshPublicKey)
+	}
+	existing = DigitalOceanApi.list_droplets_by_tag!("aion", token!()?)?
+	if List.is_empty(existing) Ok({}) else Err(AionDropletAlreadyExists(resource_ids(existing)))
+}
+
+create_paid! = |name| {
+	payment_id = require_nonempty_env!("AION_EVERPAID_PAYMENT_ID", "paid creates may only come from the Aion web server")?
+	everpaid_key = require_nonempty_env!("EVERPAID_API_KEY", "needed to verify settlement")?
+	payment = EverpaidApi.get_payment!(payment_id, everpaid_key)?
+	saved_order : Try({ payment_id : Str, reference : Str }, _)
+	saved_order = Json.parse(Path.read_utf8!(Path.utf8(".aion/payments/${name}.json"))?)
+	order = saved_order?
+	if payment.status != "settled"
+		or payment.amountSats != Everpaid.machine_price_sats
+			or order.payment_id != payment.id
+				or order.reference != payment.reference
+					or !Everpaid.reference_matches_machine(payment.reference, name) {
+		Err(PaymentNotAuthorized)
+	} else {
+		consumed = Path.utf8(".aion/payments/${name}.consumed")
+		Path.create_all!(Path.utf8(".aion/payments"))?
+		Path.create_dir!(consumed)?
+		Path.write_utf8!(Path.join(consumed, "payment-id"), payment_id)?
+		create!(name, Bool.True)
+	}
+}
+
 shell! = |name, run_pi| {
 	if !valid_name(name) {
 		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
@@ -828,7 +894,9 @@ main! = |args|
 		["image", "import-local", path] => image_import_local!(Path.utf8(path))
 		["image", "status"] => image_status!()
 		["image", "delete"] => image_delete!()
-		["create", name] => create!(name)
+		["create", name] => create!(name, Bool.False)
+		["create-paid", name] => create_paid!(name)
+		["payment-preflight", name] => payment_preflight!(name)
 		["deploy", machine, artifact] => deploy!(machine, artifact, ".")
 		["deploy", machine, artifact, "--project", project] => deploy!(machine, artifact, project)
 		[name, "shell"] => shell!(name, Bool.False)

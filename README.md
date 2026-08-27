@@ -72,6 +72,30 @@ The commands prompt before importing an image, creating a Droplet, or deleting a
 
 `create` registers `~/.ssh/id_ed25519.pub`, boots the fixed `s-2vcpu-4gb` size in fixed region `nyc3`, then provisions the model key and user-owned Pi configuration over SSH. Model choices are runtime state, not part of the shared image. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
 
+## Test Everpaid checkout
+
+This branch includes a localhost-only payment page. It creates a fixed 10-sat Everpaid Lightning invoice, polls the payment record from the Roc backend, and runs the guarded Aion create flow only after Everpaid reports `settled`. Keep the page open because its polling drives reconciliation and provisioning. This price is for integration testing and does not cover the DigitalOcean cost.
+
+From the Everpaid worktree:
+
+```sh
+./kai workflow payment-demo
+./kai shell web
+
+# The separate worktree can reuse the ignored operator environment.
+set -a
+source ../aion/.env
+set +a
+
+./.kai/artifacts/aion-web
+```
+
+Open <http://127.0.0.1:8000>. The page never receives `EVERPAID_API_KEY`; it calls the local Roc server, which uses the bearer key against `https://everpaid.app/api/v1`.
+
+The worktree still needs normal Aion image state and all create credentials. If the sibling worktree already has an imported image, its non-secret `.aion/image.json` can be copied here before starting. Before issuing an invoice, the server checks local and DigitalOcean capacity and atomically reserves the demo's single payment slot. It rechecks payment ID, machine reference, amount, and settlement immediately before provisioning.
+
+Everpaid order state and the global reservation are retained under `.aion/payments/`. Before deleting an expired order to reuse the demo, confirm its invoice did not settle. A failed or interrupted provisioning attempt intentionally requires manual inspection of `.aion/create.pending/`, DigitalOcean, and its payment markers before retrying; never clear a `provisioning` or `failed` marker blindly. A settled invoice removes the interactive create confirmation, so paying it can immediately start DigitalOcean billing.
+
 ## Cost and secret safety
 
 - URL image import requires typing `import image`; local import requires `import local image`; create requires `create <name>`. Neither billable POST runs on other input. Image deletion requires typing `delete image <id>`. Image and Droplet deletion remove local state only when DigitalOcean returns `204`. A `404` is not confirmation because it may indicate a token for the wrong account; local state is retained.
