@@ -27,6 +27,7 @@ usage = Str.join_with(
 		"  aion image status",
 		"  aion image delete",
 		"  aion create <name>",
+		"  aion create <name> --project <directory> --machine <machine>",
 		"  aion deploy <machine> <artifact> [--project <directory>]",
 		"  aion <name> shell [pi]",
 		"  aion destroy <name>",
@@ -553,12 +554,18 @@ enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, s
 	Ok({})
 }
 
-authorize_gump! = |ip, executable| {
+gump_public_key! = || {
 	home = require_env!("HOME", "needed to locate ~/.ssh/gump_aion.pub")?
 	public_key = Path.join(Path.utf8(home), ".ssh/gump_aion.pub")
-	if !Path.is_file!(public_key)? {
-		return Err(MissingGumpPublicKey("generate ~/.ssh/gump_aion and ~/.ssh/gump_aion.pub"))
+	if Path.is_file!(public_key)? {
+		Ok(public_key)
+	} else {
+		Err(MissingGumpPublicKey("generate ~/.ssh/gump_aion and ~/.ssh/gump_aion.pub"))
 	}
+}
+
+authorize_gump! = |ip, executable| {
+	public_key = gump_public_key!()?
 	wait_for_ssh!(ip, 30)?
 	copy_agent_file!(ip, public_key, "~/.config/aion/gump-key.pub")?
 	exit_code = secretless_command(
@@ -753,6 +760,44 @@ kai_command! = |operator_directory| {
 				Ok("kai")
 			}
 		}
+	}
+}
+
+build_project_image! = |project, machine| {
+	operator_directory = Env.cwd!()?
+	project_directory = Path.utf8(project)
+	if !Path.is_dir!(project_directory)? {
+		return Err(DeploymentProjectMissing(project))
+	}
+	Env.set_cwd!(project_directory)?
+	project_root = Env.cwd!()?
+	kai_command = kai_command!(project_root)?
+	result = Cmd.new_str(kai_command).args_str(["image", machine]).exec_exit_code!()
+	image = Path.join(project_root, ".kai/artifacts/images/${machine}/result/${machine}.qcow2")
+	restore = Env.set_cwd!(operator_directory)
+	match (result, restore) {
+		(Err(error), _) => Err(error)
+		(Ok(_), Err(error)) => Err(error)
+		(Ok(0), Ok({})) => if Path.is_file!(image)? Ok(image) else Err(ProjectImageMissing(Path.display(image)))
+		(Ok(_), Ok({})) => Err(KaiImageBuildFailed)
+	}
+}
+
+create_project! = |name, project, machine| {
+	if !valid_artifact(machine) {
+		return Err(InvalidMachineName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
+	}
+	if machine == "gump" {
+		_ = gump_public_key!()?
+	}
+	image = build_project_image!(project, machine)?
+	image_import_local!(image)?
+	create!(name, Bool.False, Bool.False)?
+	if machine == "gump" {
+		created = AionState.read_machine!(name)?
+		authorize_gump!(created.ip, "/run/current-system/sw/bin/gump")
+	} else {
+		Ok({})
 	}
 }
 
@@ -963,6 +1008,7 @@ main! = |args|
 		["image", "status"] => image_status!()
 		["image", "delete"] => image_delete!()
 		["create", name] => create!(name, Bool.False, Bool.True)
+		["create", name, "--project", project, "--machine", machine] => create_project!(name, project, machine)
 		["create-paid", name] => create_paid!(name)
 		["everpaid-create-invoice", name, reference] => everpaid_create_invoice!(name, reference)
 		["everpaid-get-payment", id] => everpaid_get_payment!(id)
