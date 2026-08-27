@@ -1,3 +1,46 @@
+# Research: project-defined machines and artifact deployment
+
+## Question
+
+How can Aion use Gump's current `Kaifile` both to create a fresh DigitalOcean machine containing Gump and to add usable Gump access to an existing Aion machine?
+
+## Findings
+
+### Rebase Kai's deploy feature
+
+Current Kai's local `deploy` worktree already ports closure deployment onto master. It resolves a normal `kai.build/v1` artifact, copies its Nix closure over SSH, and atomically activates a user-owned generation. This supports existing-machine artifact deployment without changing Gump's build.
+
+It does not create machines or activate host configuration. Fresh machines still require Kai's `machine`/`image` path, while usable Gump access also requires a restricted SSH key after the binary is present.
+
+### Shared Aion image followed by deployment
+
+This is the smallest existing-machine path and can also create a generic agent before deploying Gump. It does not honor a project `machine` declaration, so it is insufficient as the only implementation.
+
+### Project-owned machine and service
+
+Gump can own a custom Kai service implementation that composes its executable, DigitalOcean image support, SSH bootstrap, and runtime packages into `machine gump`. Aion can invoke the project's Kai binary to build `image gump`, import that image, and create a Droplet without Pi-specific provisioning.
+
+This keeps Gump's `Kaifile` authoritative. Runtime Gump authorization remains outside the image: Aion stages a separate public key and asks Gump to install an idempotent forced-command entry after SSH becomes ready.
+
+## Recommendation
+
+Implement both paths around one Gump `Kaifile`:
+
+1. Use the deploy-enabled current Kai worktree for `aion deploy <name> gump --project ../gump`.
+2. Add a Gump Kai plugin and `machine gump` declaration for project image builds.
+3. Add `aion create <name> --project ../gump --machine gump` to build/import that image and skip agent-only provisioning.
+4. Use one idempotent Gump authorization command after either deployment path.
+5. Keep DigitalOcean billing prompts and existing uncertain-outcome safeguards unchanged.
+
+## Sources
+
+- Kai deploy port: `../kai-deploy/plugins/std/commands/Deploy.roc`, `../kai-deploy/plugins/std/implementations/DeployNix.roc`
+- Kai machine/service composition: `../kai-deploy/plugins/std/implementations/MachineNix.roc`, `ServiceNix.roc`
+- Existing Aion image and runtime provisioning: `plugins/aion/AionPlugin.roc`, `src/aion.roc`
+- Gump SSH setup: `../gump/Setup.roc`, `../gump/Server.roc`
+
+---
+
 # Research: Everpaid-gated machine creation
 
 ## Question
