@@ -6,8 +6,11 @@ AionState := [].{
 	MachineState : { id : U64, ip : Str, name : Str, operation_tag : Str, ssh_key_id : U64 }
 	LegacyImageState : { id : U64, name : Str }
 	LegacyMachineState : { id : U64, ip : Str, name : Str, ssh_key_id : U64 }
+	ProjectImageState : { machine : Str, project : Str }
 
 	image_path = Path.utf8(".aion/image.json")
+
+	project_image_path = Path.utf8(".aion/project-image.json")
 
 	image_import_path = Path.utf8(".aion/image.pending")
 
@@ -148,7 +151,15 @@ AionState := [].{
 		Path.write_utf8!(machine_path(state.name), Json.to_str(state))
 	}
 
-	delete_image! = || Path.delete!(image_path)
+	delete_image! = || {
+		Path.delete!(image_path)?
+		if Path.exists!(project_image_path)? Path.delete!(project_image_path) else Ok({})
+	}
+
+	save_project_image! = |state| Path.write_utf8!(project_image_path, Json.to_str(state))
+
+	read_project_image! : () => Try(ProjectImageState, _)
+	read_project_image! = || Json.parse(Path.read_utf8!(project_image_path)?)
 
 	delete_machine! = |name| Path.delete!(machine_path(name))
 }

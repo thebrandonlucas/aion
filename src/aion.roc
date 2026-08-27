@@ -398,9 +398,26 @@ poll_droplet! = |auth, id, attempts_left| {
 	}
 }
 
+unset_env_args = |names|
+	match names {
+		[] => []
+		[first, .. as rest] => ["-u", first].concat(unset_env_args(rest))
+	}
+
 secretless_command = |program, arguments|
 	Cmd.new_str("env")
-		.args_str(["-u", "EVERPAID_API_KEY", "-u", "DIGITALOCEAN_TOKEN", "-u", "AION_MODEL_API_KEY", program].concat(arguments))
+		.args_str(
+			unset_env_args([
+				"AION_MODEL_API_KEY",
+				"AWS_ACCESS_KEY_ID",
+				"AWS_SECRET_ACCESS_KEY",
+				"AWS_SESSION_TOKEN",
+				"DIGITALOCEAN_SPACE_NAME",
+				"DIGITALOCEAN_SPACE_REGION",
+				"DIGITALOCEAN_TOKEN",
+				"EVERPAID_API_KEY",
+			]).concat([program]).concat(arguments),
+		)
 
 # Cloud-init/metadata key install can lag droplet activation; retry ssh for a
 # bounded window before giving up.
@@ -467,16 +484,29 @@ render_pi_settings = ||
 		enableInstallTelemetry: Bool.False,
 	})
 
+secretless_os_env = [
+	OsStr.utf8("-u"),
+	OsStr.utf8("AION_MODEL_API_KEY"),
+	OsStr.utf8("-u"),
+	OsStr.utf8("AWS_ACCESS_KEY_ID"),
+	OsStr.utf8("-u"),
+	OsStr.utf8("AWS_SECRET_ACCESS_KEY"),
+	OsStr.utf8("-u"),
+	OsStr.utf8("AWS_SESSION_TOKEN"),
+	OsStr.utf8("-u"),
+	OsStr.utf8("DIGITALOCEAN_SPACE_NAME"),
+	OsStr.utf8("-u"),
+	OsStr.utf8("DIGITALOCEAN_SPACE_REGION"),
+	OsStr.utf8("-u"),
+	OsStr.utf8("DIGITALOCEAN_TOKEN"),
+	OsStr.utf8("-u"),
+	OsStr.utf8("EVERPAID_API_KEY"),
+]
+
 copy_agent_file! = |ip, source, destination|
 	Cmd.exec!(
 		OsStr.utf8("env"),
-		[
-			OsStr.utf8("-u"),
-			OsStr.utf8("EVERPAID_API_KEY"),
-			OsStr.utf8("-u"),
-			OsStr.utf8("DIGITALOCEAN_TOKEN"),
-			OsStr.utf8("-u"),
-			OsStr.utf8("AION_MODEL_API_KEY"),
+		secretless_os_env.concat([
 			OsStr.utf8("timeout"),
 			OsStr.utf8("--kill-after=5s"),
 			OsStr.utf8("30s"),
@@ -492,7 +522,7 @@ copy_agent_file! = |ip, source, destination|
 			OsStr.utf8("StrictHostKeyChecking=accept-new"),
 			Path.to_os_str(source),
 			OsStr.utf8("aion@${ip}:${destination}"),
-		],
+		]),
 	)
 
 # The key and user configuration travel only inside a private OS temporary
@@ -527,13 +557,7 @@ enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, s
 	copy_agent_file!(ip, settings_path, "~/.pi/agent/settings.json.new")?
 	Cmd.exec!(
 		OsStr.utf8("env"),
-		[
-			OsStr.utf8("-u"),
-			OsStr.utf8("EVERPAID_API_KEY"),
-			OsStr.utf8("-u"),
-			OsStr.utf8("DIGITALOCEAN_TOKEN"),
-			OsStr.utf8("-u"),
-			OsStr.utf8("AION_MODEL_API_KEY"),
+		secretless_os_env.concat([
 			OsStr.utf8("timeout"),
 			OsStr.utf8("--kill-after=5s"),
 			OsStr.utf8("30s"),
@@ -549,19 +573,35 @@ enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, s
 			OsStr.utf8("aion@${ip}"),
 			OsStr.utf8("aion-init"),
 			OsStr.utf8("adopt-agent-config"),
-		],
+		]),
 	)?
 	Ok({})
 }
 
+valid_ssh_public_key = |key|
+	match key.split_on(" ") {
+		[kind, encoded, ..] =>
+			!encoded.is_empty()
+				and (kind.starts_with("ssh-") or kind.starts_with("ecdsa-") or kind.starts_with("sk-ssh-") or kind.starts_with("sk-ecdsa-"))
+		_ => Bool.False
+	}
+
 gump_public_key! = || {
 	home = require_env!("HOME", "needed to locate ~/.ssh/gump_aion.pub")?
-	public_key = Path.join(Path.utf8(home), ".ssh/gump_aion.pub")
-	if Path.is_file!(public_key)? {
-		Ok(public_key)
-	} else {
-		Err(MissingGumpPublicKey("generate ~/.ssh/gump_aion and ~/.ssh/gump_aion.pub"))
+	ssh = Path.join(Path.utf8(home), ".ssh")
+	public_key = Path.join(ssh, "gump_aion.pub")
+	operator_key = Path.join(ssh, "id_ed25519.pub")
+	if !Path.is_file!(public_key)? {
+		return Err(MissingGumpPublicKey("generate ~/.ssh/gump_aion and ~/.ssh/gump_aion.pub"))
 	}
+	gump_key = Path.read_utf8!(public_key)?.trim()
+	if !valid_ssh_public_key(gump_key) {
+		return Err(InvalidGumpPublicKey)
+	}
+	if Path.is_file!(operator_key)? and Path.read_utf8!(operator_key)?.trim() == gump_key {
+		return Err(GumpKeyMustBeSeparate("gump_aion.pub must differ from id_ed25519.pub"))
+	}
+	Ok(public_key)
 }
 
 authorize_gump! = |ip, executable| {
@@ -763,6 +803,17 @@ kai_command! = |operator_directory| {
 	}
 }
 
+project_create_preflight! = |name| {
+	if !valid_name(name) {
+		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
+	}
+	if AionState.has_machine!(name)? {
+		return Err(MachineAlreadyExists("local machine state or a create operation already exists"))
+	}
+	existing = DigitalOceanApi.list_droplets_by_tag!("aion", token!()?)?
+	if existing.is_empty() Ok({}) else Err(AionDropletAlreadyExists(resource_ids(existing)))
+}
+
 build_project_image! = |project, machine| {
 	operator_directory = Env.cwd!()?
 	project_directory = Path.utf8(project)
@@ -778,7 +829,7 @@ build_project_image! = |project, machine| {
 	match (result, restore) {
 		(Err(error), _) => Err(error)
 		(Ok(_), Err(error)) => Err(error)
-		(Ok(0), Ok({})) => if Path.is_file!(image)? Ok(image) else Err(ProjectImageMissing(Path.display(image)))
+		(Ok(0), Ok({})) => if Path.is_file!(image)? Ok({ image, project: Path.display(project_root) }) else Err(ProjectImageMissing(Path.display(image)))
 		(Ok(_), Ok({})) => Err(KaiImageBuildFailed)
 	}
 }
@@ -787,11 +838,20 @@ create_project! = |name, project, machine| {
 	if !valid_artifact(machine) {
 		return Err(InvalidMachineName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
 	}
+	project_create_preflight!(name)?
 	if machine == "gump" {
 		_ = gump_public_key!()?
 	}
-	image = build_project_image!(project, machine)?
-	image_import_local!(image)?
+	built = build_project_image!(project, machine)?
+	if AionState.has_saved_image!()? {
+		saved = AionState.read_project_image!()?
+		if saved.machine != machine or saved.project != built.project {
+			return Err(ProjectImageMismatch("delete the saved image before selecting another project machine"))
+		}
+	} else {
+		image_import_local!(built.image)?
+		AionState.save_project_image!({ machine, project: built.project })?
+	}
 	create!(name, Bool.False, Bool.False)?
 	if machine == "gump" {
 		created = AionState.read_machine!(name)?
@@ -837,6 +897,9 @@ deploy! = |machine_name, artifact, project| {
 		return Err(InvalidArtifactName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
 	}
 	machine = AionState.read_machine!(machine_name)?
+	if artifact == "gump" {
+		_ = gump_public_key!()?
+	}
 	operator_directory = Env.cwd!()?
 	project_directory = Path.utf8(project)
 	if !Path.is_dir!(project_directory)? {
