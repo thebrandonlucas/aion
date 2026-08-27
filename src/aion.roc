@@ -612,11 +612,15 @@ resolve_droplet_post! = |auth, name, image_id, ssh_key_id, operation_tag| {
 	}
 }
 
-provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag| {
+provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent| {
 	AionState.record_created!(droplet.id)?
 	active = poll_droplet!(auth, droplet.id, 40)?
 	ip = DigitalOcean.public_ipv4(active) ? |_| DropletPollTimeout
-	enroll_agent_config!(ip, model_key)?
+	if provision_agent {
+		enroll_agent_config!(ip, model_key)?
+	} else {
+		wait_for_ssh!(ip, 30)?
+	}
 	AionState.save_machine!({ id: active.id, ip, name, operation_tag, ssh_key_id })?
 	Ok(ip)
 }
@@ -640,14 +644,14 @@ cleanup_created! = |auth, droplet_id, operation_tag, failure| {
 	}
 }
 
-create! = |name, payment_authorized| {
+create! = |name, payment_authorized, provision_agent| {
 	if !valid_name(name) {
 		Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
 	} else if AionState.has_machine!(name)? {
 		Err(MachineAlreadyExists("local machine state or a create operation already exists"))
 	} else {
-		model_key = require_env!("AION_MODEL_API_KEY", "export a short-lived model API key")?
-		if model_key.trim().is_empty() {
+		model_key = if provision_agent require_env!("AION_MODEL_API_KEY", "export a short-lived model API key")? else ""
+		if provision_agent and model_key.trim().is_empty() {
 			Err(EmptyModelKey)
 		} else {
 			image = AionState.read_image!()?
@@ -688,7 +692,7 @@ create! = |name, payment_authorized| {
 				ReusedKey(reused) => reused.id
 			}
 			droplet = resolve_droplet_post!(auth, name, image.id, ssh_key_id, operation_tag)?
-			match provision_created!(auth, droplet, name, ssh_key_id, model_key, operation_tag) {
+			match provision_created!(auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent) {
 				Err(error) => cleanup_created!(auth, droplet.id, operation_tag, error)
 				Ok(ip) => {
 					match AionState.clear_creation!() {
@@ -821,7 +825,7 @@ create_paid! = |name| {
 		Path.create_all!(Path.utf8(".aion/payments"))?
 		Path.create_dir!(consumed)?
 		Path.write_utf8!(Path.join(consumed, "payment-id"), payment_id)?
-		create!(name, Bool.True)
+		create!(name, Bool.True, Bool.True)
 	}
 }
 
@@ -916,7 +920,7 @@ main! = |args|
 		["image", "import-local", path] => image_import_local!(Path.utf8(path))
 		["image", "status"] => image_status!()
 		["image", "delete"] => image_delete!()
-		["create", name] => create!(name, Bool.False)
+		["create", name] => create!(name, Bool.False, Bool.True)
 		["create-paid", name] => create_paid!(name)
 		["everpaid-create-invoice", name, reference] => everpaid_create_invoice!(name, reference)
 		["everpaid-get-payment", id] => everpaid_get_payment!(id)
