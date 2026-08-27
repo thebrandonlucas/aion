@@ -45,6 +45,36 @@ The commands prompt before importing an image, creating a Droplet, or deleting a
 
 `create` registers `~/.ssh/id_ed25519.pub`, boots the fixed `s-2vcpu-4gb` size in fixed region `nyc3`, then provisions the model key and user-owned Pi configuration over SSH. Model choices are runtime state, not part of the shared image. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
 
+## Create or deploy Gump from its Kaifile
+
+Gump owns a deploy-enabled project Kai, a reproducible `gump` build, and `machine gump`. Bootstrap its ignored project binary from the current Kai deploy worktree once and create a separate restricted SSH identity:
+
+```sh
+cd ../gump
+nix run path:../kai-deploy -- -f Kaifile.bootstrap run bootstrap-kai
+ssh-keygen -t ed25519 -f ~/.ssh/gump_aion -C gump-aion
+```
+
+To build Gump's DigitalOcean image, import it, create `demo`, and authorize the restricted key:
+
+```sh
+./kai workflow create-aion
+```
+
+This is billable and preserves Aion's image-import and Droplet-create confirmations. It uses `../aion/.env` through Aion's Roc credential launcher. The MVP retains one imported-image slot; delete an existing imported image explicitly before creating from a different project machine.
+
+To build and deploy the current Gump artifact to an existing saved `demo` machine, atomically activate it through Kai, then authorize the same restricted key:
+
+```sh
+./kai workflow deploy-aion
+```
+
+Set `AION_ROOT` if Aion is not at `../aion`, and `AION_MACHINE` to select a saved machine other than `demo`. Gump remains reachable over SSH port 22 with its separate key:
+
+```sh
+ssh -i ~/.ssh/gump_aion -o IdentitiesOnly=yes aion@<machine-ip> repos
+```
+
 ## Test Everpaid checkout
 
 The localhost-only payment page creates a fixed 10-sat Everpaid Lightning invoice, polls the payment record from the Roc backend, and runs the guarded Aion create flow only after Everpaid reports `settled`. Keep the page open because its polling drives reconciliation and provisioning. This price is for integration testing and does not cover the DigitalOcean cost.
