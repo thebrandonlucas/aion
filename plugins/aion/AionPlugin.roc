@@ -72,6 +72,14 @@ AionPlugin := [].{
 		required_packages: [],
 	}
 
+	supported_build_targets : List(Plugin.BackendTarget)
+	supported_build_targets = [
+		{ arch: X64, os: LINUX, value: "x86_64-linux" },
+		{ arch: AARCH64, os: LINUX, value: "aarch64-linux" },
+		{ arch: X64, os: MACOS, value: "x86_64-darwin" },
+		{ arch: AARCH64, os: MACOS, value: "aarch64-darwin" },
+	]
+
 	lock_actions : Str -> List(Plugin.Action)
 	lock_actions = |directory| [
 		Exec({
@@ -122,6 +130,8 @@ AionPlugin := [].{
 		backend: backend.name,
 		command: build_command.name,
 		renderer: |context| {
+			system = Plugin.target_value(AionPlugin.supported_build_targets, context.host_os, context.host_arch) ? |_|
+				{ byte_offset: None, message: "unsupported build platform" }
 			artifact_name = match context.args {
 				[selected] => Ok(selected)
 				_ => Err({ byte_offset: None, message: "build requires exactly one artifact name" })
@@ -142,10 +152,10 @@ AionPlugin := [].{
 			selected_sources = sources.keep_if(|source_input| inputs.contains(source_input.name))
 			directory = ".kai/roc-build"
 			actions = [
-				WriteUtf8({ content: AionPlugin.render_build_flake(selected_sources), path: "${directory}/flake.nix" }),
+				WriteUtf8({ content: AionPlugin.render_build_flake(selected_sources, system), path: "${directory}/flake.nix" }),
 				WriteUtf8({ content: AionPlugin.render_build_nix({}), path: "${directory}/build.nix" }),
 				WriteUtf8({
-					content: Json.to_str({ inputs, name: artifact_name, output, source, system: "x86_64-linux" }),
+					content: Json.to_str({ inputs, name: artifact_name, output, source, system }),
 					path: "${directory}/build.json",
 				}),
 			]
@@ -170,7 +180,7 @@ AionPlugin := [].{
 						{
 							attributes: [
 								{ key: "backend", value: backend.name },
-								{ key: "target.system", value: "x86_64-linux" },
+								{ key: "target.system", value: system },
 							],
 							kind: "kai.build/v1",
 							name: artifact_name,
@@ -257,8 +267,8 @@ AionPlugin := [].{
 		validator: NoValidation,
 	}
 
-	render_build_flake : List(Source) -> Str
-	render_build_flake = |sources| {
+	render_build_flake : List(Source), Str -> Str
+	render_build_flake = |sources, system| {
 		source_lines = sources.map(
 			|source_input| "  inputs.\"kai-source-${source_input.name}\" = { url = \"${source_input.url}\"; flake = false; };",
 		)
@@ -272,10 +282,10 @@ AionPlugin := [].{
 				"  inputs.roc-overlay.url = \"github:thebrandonlucas/roc-overlay\";",
 			].concat(source_lines).concat([
 				"  outputs = inputs@{ nixpkgs, roc-overlay, ... }: let",
-				"    system = \"x86_64-linux\";",
+				"    system = \"${system}\";",
 				"    pkgs = import nixpkgs { inherit system; overlays = [ roc-overlay.overlays.default ]; };",
 				"  in {",
-				"    legacyPackages.\"x86_64-linux\" = pkgs;",
+				"    legacyPackages.\"${system}\" = pkgs;",
 				"    kaiSources = { ${Str.join_with(source_attrs, " ")} };",
 				"  };",
 				"}",
