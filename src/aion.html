@@ -28,7 +28,7 @@
       <p>Pay the 10-sat test invoice and keep this page open. Its polling starts provisioning after Everpaid confirms settlement, creating a billable DigitalOcean machine.</p>
       <form id="machine-form">
         <label for="name">Machine name</label>
-        <input id="name" name="name" pattern="[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?" value="demo" required>
+        <input id="name" name="name" pattern="[a-z0-9](?:[a-z0-9\x2d]{0,61}[a-z0-9])?" value="demo" required>
         <button id="create" type="submit">Create payment</button>
       </form>
       <div id="checkout" hidden>
