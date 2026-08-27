@@ -1,0 +1,79 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1787498568,
+        "narHash": "sha256-9i/VTdusq/+NM/tz+J1Re+ojkMB8MBf0QshnYfzHz30=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "56c02bc00adcf003215cc4bd996d6efaf4cff188",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-darwin": {
+      "locked": {
+        "lastModified": 1783945712,
+        "narHash": "sha256-ePHSbY7/7fNdOA2CE8J4T9Jt7xRrX87N2mlKd8EsYdM=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "293d01ba488ddb4c3560ba7c8de1fbec7047f78c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-26.05-darwin",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1784007870,
+        "narHash": "sha256-djcLt/JJphyNt4eDY9XTly+/WbCK5lqWq9lSgCmJkkQ=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "overlay0": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_2",
+        "nixpkgs-darwin": "nixpkgs-darwin"
+      },
+      "locked": {
+        "lastModified": 1787490136,
+        "narHash": "sha256-OS+SQxm4dJkyRe6ZfXipDoT3V4CRHuxRjLqbYdefEi8=",
+        "owner": "thebrandonlucas",
+        "repo": "roc-overlay",
+        "rev": "da7ebe83cfc4ac0f0c7a63e9b3a5f9b4f849a5d4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "thebrandonlucas",
+        "repo": "roc-overlay",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "overlay0": "overlay0"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

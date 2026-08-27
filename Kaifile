@@ -1,0 +1,45 @@
+environment roc {
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "nix"]
+  overlays: ["github:thebrandonlucas/roc-overlay"]
+}
+
+task format {
+  environment: "roc"
+  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc"]
+}
+
+environment cli {
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "openssh", "coreutils", "awscli2"]
+  overlays: ["github:thebrandonlucas/roc-overlay"]
+}
+
+build aion {
+  environment: cli
+  source: "src/aion.roc"
+  output: "aion"
+}
+
+build aion-init {
+  environment: roc
+  source: "src/aion-init.roc"
+  output: "aion-init"
+}
+
+environment agent {
+  packages: ["git", "pi-coding-agent"]
+}
+
+service aion {
+  artifact: "aion-init"
+}
+
+machine agent {
+  environment: agent
+  system: "x86_64-linux"
+  users: ["aion"]
+  services: ["aion"]
+}
+
+workflow prepare {
+  steps: ["build aion", "image agent"]
+}
