@@ -1,5 +1,18 @@
 {
   "nodes": {
+    "kai-source-bitcoin-qr": {
+      "flake": false,
+      "locked": {
+        "lastModified": 499162500,
+        "narHash": "sha256-a9xwheteMpB0pb2jy/YD1Qad40RENF0BYDI+MWDpauU=",
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/bitcoin-qr/-/bitcoin-qr-1.4.1.tgz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/bitcoin-qr/-/bitcoin-qr-1.4.1.tgz"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1787498568,
@@ -48,7 +61,7 @@
         "type": "github"
       }
     },
-    "overlay0": {
+    "roc-overlay": {
       "inputs": {
         "nixpkgs": "nixpkgs_2",
         "nixpkgs-darwin": "nixpkgs-darwin"
@@ -69,8 +82,9 @@
     },
     "root": {
       "inputs": {
+        "kai-source-bitcoin-qr": "kai-source-bitcoin-qr",
         "nixpkgs": "nixpkgs",
-        "overlay0": "overlay0"
+        "roc-overlay": "roc-overlay"
       }
     }
   },

@@ -24,11 +24,14 @@ AionPlugin := [].{
 		}),
 	]
 
+	build_inputs_field = Body.optional("inputs", StringList)
+
 	build_command : Plugin.Command
 	build_command = Plugin.Command.{
 		argument_policy: AllowArguments,
 		body: Body.object([
 			Body.required("environment", Identifier),
+			build_inputs_field,
 			Body.required("source", String),
 			Body.required("output", String),
 		]),
@@ -97,6 +100,22 @@ AionPlugin := [].{
 		}),
 	]
 
+	Source := { name : Str, url : Str }
+
+	all_sources : Plugin.RenderContext -> Try(List(Source), Plugin.RendererDiagnostic)
+	all_sources = |context|
+		Plugin.project_configs(context, ["source"]).map_try(
+			|entry| {
+				source_name = match entry.header {
+					["source", selected] | ["source", selected, _] => Ok(selected)
+					_ => Err({ byte_offset: None, message: "source declaration requires a name" })
+				}?
+				url = Body.get_string(entry.config, "url") ? |_|
+					{ byte_offset: None, message: "validated source '${source_name}' is missing 'url'" }
+				Ok({ name: source_name, url })
+			},
+		)
+
 	build_implementation : Plugin.Implementation
 	build_implementation = Plugin.Implementation.{
 		actions: [],
@@ -115,12 +134,18 @@ AionPlugin := [].{
 				byte_offset: None,
 				message: "validated build configuration is missing 'output'",
 			}
+			inputs = Plugin.validated_strings(context.config, AionPlugin.build_inputs_field)?
+			sources = AionPlugin.all_sources(context)?
+			if !inputs.all(|input| sources.any(|source_input| source_input.name == input)) {
+				return Err({ byte_offset: None, message: "build input has no declared source" })
+			}
+			selected_sources = sources.keep_if(|source_input| inputs.contains(source_input.name))
 			directory = ".kai/roc-build"
 			actions = [
-				WriteUtf8({ content: AionPlugin.render_build_flake({}), path: "${directory}/flake.nix" }),
+				WriteUtf8({ content: AionPlugin.render_build_flake(selected_sources), path: "${directory}/flake.nix" }),
 				WriteUtf8({ content: AionPlugin.render_build_nix({}), path: "${directory}/build.nix" }),
 				WriteUtf8({
-					content: Json.to_str({ name: artifact_name, output, source, system: "x86_64-linux" }),
+					content: Json.to_str({ inputs, name: artifact_name, output, source, system: "x86_64-linux" }),
 					path: "${directory}/build.json",
 				}),
 			]
@@ -232,20 +257,32 @@ AionPlugin := [].{
 		validator: NoValidation,
 	}
 
-	render_build_flake : {} -> Str
-	render_build_flake = |_| Str.join_with(
-		[
-			"{",
-			"  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";",
-			"  inputs.roc-overlay.url = \"github:thebrandonlucas/roc-overlay\";",
-			"  outputs = { nixpkgs, roc-overlay, ... }: let",
-			"    system = \"x86_64-linux\";",
-			"    pkgs = import nixpkgs { inherit system; overlays = [ roc-overlay.overlays.default ]; };",
-			"  in { legacyPackages.\"x86_64-linux\" = pkgs; };",
-			"}",
-		],
-		"\n",
-	)
+	render_build_flake : List(Source) -> Str
+	render_build_flake = |sources| {
+		source_lines = sources.map(
+			|source_input| "  inputs.\"kai-source-${source_input.name}\" = { url = \"${source_input.url}\"; flake = false; };",
+		)
+		source_attrs = sources.map(
+			|source_input| "\"${source_input.name}\" = inputs.\"kai-source-${source_input.name}\";",
+		)
+		Str.join_with(
+			[
+				"{",
+				"  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";",
+				"  inputs.roc-overlay.url = \"github:thebrandonlucas/roc-overlay\";",
+			].concat(source_lines).concat([
+				"  outputs = inputs@{ nixpkgs, roc-overlay, ... }: let",
+				"    system = \"x86_64-linux\";",
+				"    pkgs = import nixpkgs { inherit system; overlays = [ roc-overlay.overlays.default ]; };",
+				"  in {",
+				"    legacyPackages.\"x86_64-linux\" = pkgs;",
+				"    kaiSources = { ${Str.join_with(source_attrs, " ")} };",
+				"  };",
+				"}",
+			]),
+			"\n",
+		)
+	}
 
 	render_build_nix : {} -> Str
 	render_build_nix = |_| Str.join_with(
@@ -254,7 +291,12 @@ AionPlugin := [].{
 			"  config = builtins.fromJSON (builtins.readFile ./build.json);",
 			"  flake = builtins.getFlake (toString ./.);",
 			"  pkgs = builtins.getAttr config.system flake.legacyPackages;",
+			"  lib = pkgs.lib;",
 			"  source = pkgs.nix-gitignore.gitignoreFilterRecursiveSource (_: _: true) \".git\\n.kai\" ../..;",
+			"  inputLinks = lib.concatMapStringsSep \"\\n\" (name:",
+			"    \"ln -s -- ${AionPlugin.nix_interpolation("lib.escapeShellArg (toString (builtins.getAttr name flake.kaiSources))")} .kai/inputs/${AionPlugin.nix_interpolation("lib.escapeShellArg name")}\"",
+			"  ) config.inputs;",
+			"  bitcoinQrAssets = if builtins.elem \"bitcoin-qr\" config.inputs then toString flake.kaiSources.\"bitcoin-qr\" + \"/dist/bitcoin-qr\" else \"\";",
 			"  platform = pkgs.fetchurl {",
 			"    url = \"${AionPlugin.basic_cli_url}\";",
 			"    hash = \"${AionPlugin.basic_cli_hash}\";",
@@ -272,6 +314,8 @@ AionPlugin := [].{
 			"} ''",
 			"  cp -R ${AionPlugin.nix_interpolation("source")}/. .",
 			"  chmod -R u+w .",
+			"  mkdir -p .kai/inputs",
+			"  ${AionPlugin.nix_interpolation("inputLinks")}",
 			"  cp ${AionPlugin.nix_interpolation("platform")} ${AionPlugin.basic_cli_name}.tar.zst",
 			"  cp ${AionPlugin.nix_interpolation("rocHttp")} ${AionPlugin.roc_http_name}.tar.zst",
 			"  cp ${AionPlugin.nix_interpolation("basicWebserver")} ${AionPlugin.basic_webserver_name}.tar.zst",
@@ -282,8 +326,9 @@ AionPlugin := [].{
 			"  substituteInPlace ${AionPlugin.basic_webserver_name}/main.roc --replace-fail '${AionPlugin.roc_http_url}' \"$PWD/${AionPlugin.roc_http_name}/main.roc\"",
 			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace '${AionPlugin.basic_cli_url}' \"$PWD/${AionPlugin.basic_cli_name}/main.roc\"",
 			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace '${AionPlugin.basic_webserver_url}' \"$PWD/${AionPlugin.basic_webserver_name}/main.roc\"",
-			# Apps that do not declare the http package have nothing to substitute.
+			# Apps that do not declare the http package or browser assets have nothing to substitute.
 			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace '${AionPlugin.roc_http_url}' \"$PWD/${AionPlugin.roc_http_name}/main.roc\"",
+			"  substituteInPlace ${AionPlugin.nix_interpolation("config.source")} --replace-quiet 'BITCOIN_QR_ASSETS' ${AionPlugin.nix_interpolation("lib.escapeShellArg bitcoinQrAssets")}",
 			"  roc build ${AionPlugin.nix_interpolation("config.source")} --opt=size --output=${AionPlugin.nix_interpolation("config.output")}",
 			"  install -Dm755 ${AionPlugin.nix_interpolation("config.output")} $out",
 			"''",
