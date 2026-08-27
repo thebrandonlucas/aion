@@ -61,7 +61,7 @@
         "type": "github"
       }
     },
-    "roc-overlay": {
+    "overlay0": {
       "inputs": {
         "nixpkgs": "nixpkgs_2",
         "nixpkgs-darwin": "nixpkgs-darwin"
@@ -84,7 +84,7 @@
       "inputs": {
         "kai-source-bitcoin-qr": "kai-source-bitcoin-qr",
         "nixpkgs": "nixpkgs",
-        "roc-overlay": "roc-overlay"
+        "overlay0": "overlay0"
       }
     }
   },
