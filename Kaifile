@@ -77,6 +77,11 @@ task delete-image {
   run: [".kai/artifacts/aion-run", "delete-image"]
 }
 
+task payment-preflight {
+  environment: "web"
+  run: [".kai/artifacts/aion-run", "payment-preflight"]
+}
+
 task payment-server {
   environment: "web"
   run: [".kai/artifacts/aion-run", "payment-server"]
@@ -106,5 +111,5 @@ workflow import-image {
 }
 
 workflow payment-demo {
-  steps: ["build aion", "build aion-run", "build aion-web", "run payment-server"]
+  steps: ["build aion", "build aion-run", "build aion-web", "run payment-preflight", "run payment-server"]
 }

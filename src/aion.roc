@@ -825,14 +825,21 @@ shell! = |name, run_pi| {
 }
 
 image_status! = || {
-	id = if AionState.has_saved_image!()? {
+	saved = AionState.has_saved_image!()?
+	id = if saved {
 		image = AionState.read_image!()?
 		image.id
 	} else {
 		AionState.read_pending_image_id!()?
 	}
 	image = DigitalOceanApi.get_image!(id, token!()?)?
-	Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) is ${image.status}")
+	if !saved and image.status == "available" {
+		operation_tag = AionState.read_pending_image_operation_tag!()?
+		AionState.save_image!({ id: image.id, name: image.name, operation_tag })?
+		Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) is available; local image state recovered; pending source state retained for lifecycle cleanup")
+	} else {
+		Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) is ${image.status}")
+	}
 }
 
 image_delete! = || {

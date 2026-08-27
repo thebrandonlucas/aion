@@ -60,6 +60,11 @@ AionState := [].{
 		}
 	}
 
+	read_pending_image_operation_tag! = || {
+		operation_tag = Path.read_utf8!(Path.join(image_import_path, "operation-tag"))?.trim()
+		if operation_tag.is_empty() Ok("recovered-unknown") else Ok(operation_tag)
+	}
+
 	clear_image_import! = || Path.delete_all!(image_import_path)
 
 	has_machine! = |name| {

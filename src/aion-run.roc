@@ -19,6 +19,7 @@ usage = Str.join_with(
 		"  aion-run shell-pi-demo",
 		"  aion-run destroy-demo",
 		"  aion-run delete-image",
+		"  aion-run payment-preflight",
 		"  aion-run payment-server",
 	],
 	"\n",
@@ -172,6 +173,7 @@ main! = |args|
 		["shell-pi-demo"] => shell_demo!(Bool.True)
 		["destroy-demo"] => digitalocean_operation!(load_dotenv!()?, ["destroy", "demo"], Bool.False)
 		["delete-image"] => digitalocean_operation!(load_dotenv!()?, ["image", "delete"], Bool.False)
+		["payment-preflight"] => digitalocean_operation!(load_dotenv!()?, ["payment-preflight", "demo"], Bool.True)
 		["payment-server"] => payment_server!(load_dotenv!()?)
 		_ => Stdout.line!(usage)
 	}
