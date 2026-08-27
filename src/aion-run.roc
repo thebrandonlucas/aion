@@ -15,6 +15,8 @@ usage = Str.join_with(
 		"  aion-run import-image",
 		"  aion-run image-status",
 		"  aion-run create-demo",
+		"  aion-run create-project <name> <project> <machine>",
+		"  aion-run deploy-project <name> <project> <artifact>",
 		"  aion-run shell-demo",
 		"  aion-run shell-pi-demo",
 		"  aion-run destroy-demo",
@@ -93,6 +95,20 @@ import_image! = |entries|
 		["AWS_SESSION_TOKEN", "AION_MODEL_API_KEY", "EVERPAID_API_KEY"],
 	)
 
+create_project! = |entries, name, project, machine|
+	run!(
+		".kai/artifacts/aion",
+		["create", name, "--project", project, "--machine", machine],
+		[
+			("AWS_ACCESS_KEY_ID", require_value(entries, "AWS_ACCESS_KEY_ID")?),
+			("AWS_SECRET_ACCESS_KEY", require_value(entries, "AWS_SECRET_ACCESS_KEY")?),
+			("DIGITALOCEAN_SPACE_NAME", require_value(entries, "DIGITALOCEAN_SPACE_NAME")?),
+			("DIGITALOCEAN_SPACE_REGION", require_value(entries, "DIGITALOCEAN_SPACE_REGION")?),
+			("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?),
+		],
+		["AWS_SESSION_TOKEN", "AION_MODEL_API_KEY", "EVERPAID_API_KEY"],
+	)
+
 image_status! = |entries|
 	run!(
 		".kai/artifacts/aion",
@@ -130,6 +146,21 @@ digitalocean_operation! = |entries, arguments, include_model_key| {
 		],
 	)
 }
+
+deploy_project! = |name, project, artifact|
+	run!(
+		".kai/artifacts/aion",
+		["deploy", name, artifact, "--project", project],
+		[],
+		[
+			"AION_MODEL_API_KEY",
+			"AWS_ACCESS_KEY_ID",
+			"AWS_SECRET_ACCESS_KEY",
+			"AWS_SESSION_TOKEN",
+			"DIGITALOCEAN_TOKEN",
+			"EVERPAID_API_KEY",
+		],
+	)
 
 shell_demo! = |run_pi|
 	run!(
@@ -169,6 +200,8 @@ main! = |args|
 		["import-image"] => import_image!(load_dotenv!()?)
 		["image-status"] => image_status!(load_dotenv!()?)
 		["create-demo"] => digitalocean_operation!(load_dotenv!()?, ["create", "demo"], Bool.True)
+		["create-project", name, project, machine] => create_project!(load_dotenv!()?, name, project, machine)
+		["deploy-project", name, project, artifact] => deploy_project!(name, project, artifact)
 		["shell-demo"] => shell_demo!(Bool.False)
 		["shell-pi-demo"] => shell_demo!(Bool.True)
 		["destroy-demo"] => digitalocean_operation!(load_dotenv!()?, ["destroy", "demo"], Bool.False)
