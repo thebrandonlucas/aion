@@ -13,7 +13,7 @@ task format {
 }
 
 environment cli {
-  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "openssh", "coreutils", "awscli2"]
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "bashInteractive", "openssh", "coreutils", "awscli2"]
   overlays: ["github:thebrandonlucas/roc-overlay"]
 }
 
@@ -45,6 +45,11 @@ build aion-web {
   inputs: ["bitcoin-qr"]
   source: "src/aion-web.roc"
   output: "aion-web"
+}
+
+task aion-shell {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "shell"]
 }
 
 task import-image {
@@ -105,6 +110,10 @@ machine agent {
   system: "x86_64-linux"
   users: ["aion"]
   services: ["aion"]
+}
+
+workflow aion-shell {
+  steps: ["build aion", "build aion-run", "run aion-shell"]
 }
 
 workflow prepare {

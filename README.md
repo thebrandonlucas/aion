@@ -17,6 +17,15 @@ nix run github:thebrandonlucas/kai -- -f Kaifile.bootstrap run bootstrap-kai
 
 The project plugin adds only Aion's Roc package build and NixOS service configuration. Kai's standard `image` command composes that service into the machine and produces `.kai/artifacts/images/agent/result/agent.qcow2`.
 
+To enter a dependency-complete shell with the latest Aion CLI built from the working tree and `.env` loaded, run:
+
+```sh
+./kai workflow aion-shell
+aion <command>
+```
+
+The interactive shell receives every value in `.env`; exit it when finished.
+
 `workflow prepare` is the non-billable preparation command. It builds the CLI, environment launcher, initializer, and agent image; it does not contact DigitalOcean, Spaces, Everpaid, or model APIs.
 
 ## Test the full pipeline

@@ -3,6 +3,7 @@ app [main!] {
 }
 
 import pf.Cmd
+import pf.Env
 import pf.OsStr
 import pf.Path
 import pf.Stdout
@@ -12,6 +13,7 @@ Entry : { name : Str, value : Str }
 usage = Str.join_with(
 	[
 		"Usage: aion-run <command>",
+		"  aion-run shell",
 		"  aion-run import-image",
 		"  aion-run image-status",
 		"  aion-run create-demo",
@@ -79,6 +81,14 @@ run! = |program, arguments, environment, unset| {
 		.envs_str(environment)
 		.exec_exit_code!() ? |_| CommandLaunchFailed(program)
 	if exit_code == 0 Ok({}) else Err(CommandFailed({ program, exit_code }))
+}
+
+shell! = |entries| {
+	root = Path.display(Env.cwd!()?)
+	path = Env.var_str!(OsStr.utf8("PATH"))?
+	shell = Env.var_str!(OsStr.utf8("SHELL")) ?? "bash"
+	environment = entries.map(|entry| (entry.name, entry.value)).append(("PATH", "${root}/.kai/artifacts:${path}"))
+	run!(shell, [], environment, [])
 }
 
 import_image! = |entries|
@@ -197,6 +207,7 @@ payment_server! = |entries|
 
 main! = |args|
 	match args.drop_first(1).map(OsStr.display) {
+		["shell"] => shell!(load_dotenv!()?)
 		["import-image"] => import_image!(load_dotenv!()?)
 		["image-status"] => image_status!(load_dotenv!()?)
 		["create-demo"] => digitalocean_operation!(load_dotenv!()?, ["create", "demo"], Bool.True)
