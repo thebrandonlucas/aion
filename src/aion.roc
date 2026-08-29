@@ -30,6 +30,7 @@ usage = Str.join_with(
 		"  aion create <name>",
 		"  aion create <name> <product>",
 		"  aion create <name> --project <directory> --machine <machine>",
+		"  aion recover <name> <droplet-id>",
 		"  aion deploy <machine> <artifact> [--project <directory>]",
 		"  aion <name> shell [pi]",
 		"  aion destroy <name>",
@@ -68,6 +69,25 @@ operation_status = |operation_tag, stage|
 
 resource_ids = |resources|
 	Str.join_with(resources.map(|resource| U64.to_str(resource.id)), ", ")
+
+operation_tag_from = |droplet|
+	match droplet.tags.keep_if(|tag| tag.starts_with("aion-droplet-")) {
+		[tag] => Ok(tag)
+		[] => Err(DropletOperationTagMissing)
+		_ => Err(MultipleDropletOperationTags)
+	}
+
+print_existing_droplets! = |droplets|
+	match droplets {
+		[] => Ok({})
+		[first, .. as rest] => {
+			addresses = Str.join_with(DigitalOcean.public_ipv4s(first), ", ")
+			ip = if addresses.is_empty() "no public IP" else addresses
+			Stderr.line!("existing Aion Droplet: ${first.name}, id ${U64.to_str(first.id)}, status ${first.status}, IP ${ip}")?
+			Stderr.line!("  recover it: aion recover ${first.name} ${U64.to_str(first.id)}")?
+			print_existing_droplets!(rest)
+		}
+	}
 
 require_env! = |name, hint|
 	match Env.var_str!(OsStr.utf8(name)) {
@@ -739,7 +759,7 @@ create! = |name, payment_authorized, provision_agent| {
 	if !valid_name(name) {
 		Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
 	} else if AionState.has_machine!(name)? {
-		Err(MachineAlreadyExists("local machine state or a create operation already exists"))
+		Err(MachineAlreadyExists("run 'aion status' for local state and 'aion resources' for provider IDs and IPs"))
 	} else {
 		model_key = if provision_agent require_env!("AION_MODEL_API_KEY", "export a short-lived model API key")? else ""
 		if provision_agent and model_key.trim().is_empty() {
@@ -766,7 +786,9 @@ create! = |name, payment_authorized, provision_agent| {
 			if !List.is_empty(existing) {
 				ids = resource_ids(existing)
 				AionState.record_creation_status!(operation_status(operation_tag, "Refused before POST because tagged Aion Droplet IDs already exist: ${ids}")) ?? {}
-				Stderr.line!("refusing create: tagged Aion Droplet IDs already exist: ${ids}")?
+				Stderr.line!("create refused because existing Aion Droplets may still be billing:")?
+				print_existing_droplets!(existing)?
+				Stderr.line!("  inspect everything: aion resources")?
 				AionState.clear_creation!()?
 				return Err(AionDropletAlreadyExists(ids))
 			}
@@ -817,10 +839,17 @@ project_create_preflight! = |name| {
 		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
 	}
 	if AionState.has_machine!(name)? {
-		return Err(MachineAlreadyExists("local machine state or a create operation already exists"))
+		return Err(MachineAlreadyExists("run 'aion status' for local state and 'aion resources' for provider IDs and IPs"))
 	}
 	existing = DigitalOceanApi.list_droplets_by_tag!("aion", token!()?)?
-	if existing.is_empty() Ok({}) else Err(AionDropletAlreadyExists(resource_ids(existing)))
+	if existing.is_empty() {
+		Ok({})
+	} else {
+		Stderr.line!("create refused because existing Aion Droplets may still be billing:")?
+		print_existing_droplets!(existing)?
+		Stderr.line!("  inspect everything: aion resources")?
+		Err(AionDropletAlreadyExists(resource_ids(existing)))
+	}
 }
 
 Product : { description : Str, machine : Str, priceSats : U64, project : Str, title : Str }
@@ -928,6 +957,67 @@ create_product! = |name, product_name| {
 	product = read_product!(product_name)?
 	create_project!(name, product.project, product.config.machine)
 }
+
+operator_ssh_key! = |auth| {
+	home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
+	public_key = Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?.trim()
+	match DigitalOceanApi.list_ssh_keys!(auth)?.keep_if(|key| key.public_key.trim() == public_key) {
+		[first, ..] => Ok(first)
+		[] => Err(NoMatchingSshKey)
+	}
+}
+
+recover! = |name, id| {
+	if !valid_name(name) {
+		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
+	}
+	if AionState.has_saved_machine!(name)? {
+		return Err(MachineAlreadyExists("saved machine state already exists; run 'aion status'"))
+	}
+	if AionState.has_pending_creation!()? {
+		pending_name = AionState.read_pending_creation_name!()?
+		pending_id = AionState.read_pending_creation_id!()?
+		if pending_name != name or pending_id != id {
+			return Err(PendingCreationDoesNotMatch({ id: pending_id, name: pending_name }))
+		}
+	}
+	auth = token!()?
+	droplet = DigitalOceanApi.get_droplet!(id, auth)?
+	ip = DigitalOcean.public_ipv4(droplet) ? |_| DropletNotRecoverable({ id, name, status: droplet.status })
+	operation_tag = operation_tag_from(droplet)?
+	if droplet.name != name or droplet.status != "active" or !List.any(droplet.tags, |tag| tag == "aion") {
+		return Err(DropletNotRecoverable({ id, name, status: droplet.status }))
+	}
+	if AionState.has_pending_creation!()? {
+		pending_tag = AionState.read_pending_creation_operation_tag!()?
+		if pending_tag != operation_tag {
+			return Err(PendingCreationTagDoesNotMatch)
+		}
+	}
+	ssh_key = operator_ssh_key!(auth)?
+	if AionState.has_project_image!()? {
+		project = AionState.read_project_image!()?
+		if project.machine == "gump" {
+			authorize_gump!(ip, "/run/current-system/sw/bin/gump")?
+		} else {
+			wait_for_ssh!(ip, 30)?
+		}
+	} else {
+		model_key = require_nonempty_env!("AION_MODEL_API_KEY", "needed to finish agent provisioning")?
+		enroll_agent_config!(ip, model_key)?
+	}
+	AionState.save_machine!({ id, ip, name, operation_tag, ssh_key_id: ssh_key.id })?
+	if AionState.has_pending_creation!()? {
+		AionState.clear_creation!()?
+	}
+	Stdout.line!("recovered machine '${name}' at ${ip} (Droplet ID ${U64.to_str(id)}, operation tag ${operation_tag})")
+}
+
+recover_argument! = |name, id|
+	match U64.from_str(id) {
+		Ok(parsed) => recover!(name, parsed)
+		Err(_) => Err(InvalidDropletId(id))
+	}
 
 deploy_in_project! = |kai_command, machine, artifact| {
 	kaifile = Path.utf8("Kaifile")
@@ -1142,6 +1232,7 @@ main! = |args|
 		["create", name] => create!(name, Bool.False, Bool.True)
 		["create", name, product] => create_product!(name, product)
 		["create", name, "--project", project, "--machine", machine] => create_project!(name, project, machine)
+		["recover", name, id] => recover_argument!(name, id)
 		["create-paid", name] => create_paid!(name)
 		["everpaid-create-invoice", name, reference] => everpaid_create_invoice!(name, reference)
 		["everpaid-get-payment", id] => everpaid_get_payment!(id)

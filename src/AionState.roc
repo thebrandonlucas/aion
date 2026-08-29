@@ -70,8 +70,10 @@ AionState := [].{
 
 	clear_image_import! = || Path.delete_all!(image_import_path)
 
+	has_saved_machine! = |name| Path.exists!(machine_path(name))
+
 	has_machine! = |name| {
-		if Path.exists!(machine_path(name))? {
+		if has_saved_machine!(name)? {
 			Ok(Bool.True)
 		} else {
 			Path.exists!(creation_path)
@@ -101,8 +103,32 @@ AionState := [].{
 
 	record_creation_status! = |status| write_creation_file!("status", status)
 
-	record_created! = |droplet_id|
+	record_created! = |droplet_id| {
+		write_creation_file!("droplet-id", U64.to_str(droplet_id))?
 		record_creation_status!("Droplet ID ${U64.to_str(droplet_id)}\n")
+	}
+
+	has_pending_creation! = || Path.is_dir!(creation_path)
+
+	read_pending_creation_name! = || {
+		name = Path.read_utf8!(Path.join(creation_path, "name"))?.trim()
+		if name.is_empty() Err(InvalidPendingCreationState) else Ok(name)
+	}
+
+	read_pending_creation_id! = || {
+		text = Path.read_utf8!(Path.join(creation_path, "droplet-id"))?
+		match U64.from_str(text) {
+			Ok(id) => Ok(id)
+			Err(_) => Err(InvalidPendingCreationState)
+		}
+	}
+
+	read_pending_creation_operation_tag! = || {
+		operation_tag = Path.read_utf8!(Path.join(creation_path, "operation-tag"))?.trim()
+		if operation_tag.is_empty() Err(InvalidPendingCreationState) else Ok(operation_tag)
+	}
+
+	read_pending_creation_status! = || Path.read_utf8!(Path.join(creation_path, "status"))
 
 	clear_creation! = || Path.delete_all!(creation_path)
 
@@ -157,6 +183,8 @@ AionState := [].{
 	}
 
 	save_project_image! = |state| Path.write_utf8!(project_image_path, Json.to_str(state))
+
+	has_project_image! = || Path.is_file!(project_image_path)
 
 	read_project_image! : () => Try(ProjectImageState, _)
 	read_project_image! = || Json.parse(Path.read_utf8!(project_image_path)?)

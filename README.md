@@ -68,6 +68,8 @@ aion create demo gump
 
 The bundled `gump` entry resolves `../gump/Kaifile`. Creation asks that project's Kai binary to build `machine gump`, so the image contains a Gump binary built from the current adjacent Gump source.
 
+If creation was interrupted after DigitalOcean accepted the Droplet, a later create prints its ID, status, public IP, and exact recovery command. `aion recover <name> <droplet-id>` validates the provider name, active state, Aion operation tag, operator SSH key, and SSH access before restoring local machine state and finishing Gump authorization. Use `aion resources` for the complete provider inventory.
+
 ## Create or deploy Gump from its Kaifile
 
 Gump owns a deploy-enabled project Kai, a reproducible `gump` build, and `machine gump`. Bootstrap its ignored project binary from the current Kai deploy worktree once and create a separate restricted SSH identity:
