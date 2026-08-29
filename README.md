@@ -54,6 +54,20 @@ The commands prompt before importing an image, creating a Droplet, or deleting a
 
 `create` registers `~/.ssh/id_ed25519.pub`, boots the fixed `s-2vcpu-4gb` size in fixed region `nyc3`, then provisions the model key and user-owned Pi configuration over SSH. Model choices are runtime state, not part of the shared image. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
 
+## Product catalog
+
+Product metadata lives under `products/<name>/product.json`. It contains display and pricing data plus the path and machine name for an ordinary Kai project; it does not add product syntax to the project's `Kaifile`.
+
+List products or create a machine from one inside the Aion shell:
+
+```sh
+./kai workflow aion-shell
+aion products
+aion create demo gump
+```
+
+The bundled `gump` entry resolves `../gump/Kaifile`. Creation asks that project's Kai binary to build `machine gump`, so the image contains a Gump binary built from the current adjacent Gump source.
+
 ## Create or deploy Gump from its Kaifile
 
 Gump owns a deploy-enabled project Kai, a reproducible `gump` build, and `machine gump`. Bootstrap its ignored project binary from the current Kai deploy worktree once and create a separate restricted SSH identity:

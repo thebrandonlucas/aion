@@ -26,7 +26,9 @@ usage = Str.join_with(
 		"  aion image import-local <path>",
 		"  aion image status",
 		"  aion image delete",
+		"  aion products",
 		"  aion create <name>",
+		"  aion create <name> <product>",
 		"  aion create <name> --project <directory> --machine <machine>",
 		"  aion deploy <machine> <artifact> [--project <directory>]",
 		"  aion <name> shell [pi]",
@@ -821,6 +823,49 @@ project_create_preflight! = |name| {
 	if existing.is_empty() Ok({}) else Err(AionDropletAlreadyExists(resource_ids(existing)))
 }
 
+Product : { description : Str, machine : Str, priceSats : U64, project : Str, title : Str }
+
+read_product! : Str => Try({ config : Product, project : Str }, _)
+read_product! = |name| {
+	if !valid_name(name) {
+		return Err(InvalidProductName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
+	}
+	product_directory = Path.join(Path.utf8("products"), name)
+	config : Product
+	config = Json.parse(Path.read_utf8!(Path.join(product_directory, "product.json"))?)?
+	if config.title.trim().is_empty() or config.description.trim().is_empty() or !valid_artifact(config.machine) {
+		return Err(InvalidProductMetadata(name))
+	}
+	project = Path.join(product_directory, config.project)
+	if !Path.is_file!(Path.join(project, "Kaifile"))? {
+		return Err(ProductKaifileMissing(name))
+	}
+	Ok({ config, project: Path.display(project) })
+}
+
+print_products! = |paths|
+	match paths {
+		[] => Ok({})
+		[first, .. as rest] => {
+			name = Path.filename(first).map_ok(Path.display) ?? ""
+			if Path.is_dir!(first)? and valid_name(name) and Path.is_file!(Path.join(first, "product.json"))? {
+				product = read_product!(name)?
+				price = if product.config.priceSats == 0 "free" else "${U64.to_str(product.config.priceSats)} sats"
+				Stdout.line!("${name}\t${price}\t${product.config.title} — ${product.config.description}")?
+			}
+			print_products!(rest)
+		}
+	}
+
+products! = || {
+	catalog = Path.utf8("products")
+	if !Path.is_dir!(catalog)? {
+		Err(ProductCatalogMissing("products"))
+	} else {
+		print_products!(Path.list!(catalog)?)
+	}
+}
+
 build_project_image! = |project, machine| {
 	operator_directory = Env.cwd!()?
 	project_directory = Path.utf8(project)
@@ -877,6 +922,11 @@ create_project! = |name, project, machine| {
 	} else {
 		Ok({})
 	}
+}
+
+create_product! = |name, product_name| {
+	product = read_product!(product_name)?
+	create_project!(name, product.project, product.config.machine)
 }
 
 deploy_in_project! = |kai_command, machine, artifact| {
@@ -1088,7 +1138,9 @@ main! = |args|
 		["image", "import-local", path] => image_import_local!(Path.utf8(path))
 		["image", "status"] => image_status!()
 		["image", "delete"] => image_delete!()
+		["products"] => products!()
 		["create", name] => create!(name, Bool.False, Bool.True)
+		["create", name, product] => create_product!(name, product)
 		["create", name, "--project", project, "--machine", machine] => create_project!(name, project, machine)
 		["create-paid", name] => create_paid!(name)
 		["everpaid-create-invoice", name, reference] => everpaid_create_invoice!(name, reference)
