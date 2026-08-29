@@ -83,12 +83,25 @@ run! = |program, arguments, environment, unset| {
 	if exit_code == 0 Ok({}) else Err(CommandFailed({ program, exit_code }))
 }
 
+login_shell! = || {
+	user = Env.var_str!(OsStr.utf8("USER"))?
+	entries = Path.read_utf8!(Path.utf8("/etc/passwd"))?.split_on("\n")
+	match entries.keep_if(|entry| entry.starts_with("${user}:")) {
+		[entry] =>
+			match entry.split_on(":") {
+				[_, _, _, _, _, _, shell] if !shell.is_empty() => Ok(shell)
+				_ => Err(InvalidPasswdEntry)
+			}
+		_ => Err(LoginShellUnavailable)
+	}
+}
+
 shell! = |entries| {
 	root = Path.display(Env.cwd!()?)
 	path = Env.var_str!(OsStr.utf8("PATH"))?
-	shell = Env.var_str!(OsStr.utf8("SHELL")) ?? "bash"
+	shell = login_shell!() ?? "bash"
 	environment = entries.map(|entry| (entry.name, entry.value)).append(("PATH", "${root}/.kai/artifacts:${path}"))
-	run!(shell, [], environment, [])
+	run!(shell, [], environment, ["PS1", "PROMPT", "RPROMPT"])
 }
 
 import_image! = |entries|
