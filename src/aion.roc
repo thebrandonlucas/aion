@@ -547,6 +547,24 @@ copy_agent_file! = |ip, source, destination|
 		]),
 	)
 
+run_agent_command! = |ip, arguments|
+	Cmd.exec!(
+		OsStr.utf8("env"),
+		secretless_os_env.concat([
+			OsStr.utf8("timeout"),
+			OsStr.utf8("--kill-after=5s"),
+			OsStr.utf8("30s"),
+			OsStr.utf8("ssh"),
+			OsStr.utf8("-o"),
+			OsStr.utf8("BatchMode=yes"),
+			OsStr.utf8("-o"),
+			OsStr.utf8("ConnectTimeout=10"),
+			OsStr.utf8("-o"),
+			OsStr.utf8("ConnectionAttempts=1"),
+			OsStr.utf8("aion@${ip}"),
+		]).concat(arguments),
+	)
+
 # The key and user configuration travel only inside a private OS temporary
 # directory over scp/ssh. Cleanup runs on all paths.
 enroll_agent_config! = |ip, model_key| {
@@ -577,26 +595,19 @@ enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, s
 	copy_agent_file!(ip, key_path, "~/.config/aion/model-key.new")?
 	copy_agent_file!(ip, models_path, "~/.pi/agent/models.json.new")?
 	copy_agent_file!(ip, settings_path, "~/.pi/agent/settings.json.new")?
-	Cmd.exec!(
-		OsStr.utf8("env"),
-		secretless_os_env.concat([
-			OsStr.utf8("timeout"),
-			OsStr.utf8("--kill-after=5s"),
-			OsStr.utf8("30s"),
-			OsStr.utf8("ssh"),
-			OsStr.utf8("-o"),
-			OsStr.utf8("BatchMode=yes"),
-			OsStr.utf8("-o"),
-			OsStr.utf8("ConnectTimeout=10"),
-			OsStr.utf8("-o"),
-			OsStr.utf8("ConnectionAttempts=1"),
-			OsStr.utf8("-o"),
-			OsStr.utf8("StrictHostKeyChecking=accept-new"),
-			OsStr.utf8("aion@${ip}"),
-			OsStr.utf8("aion-init"),
-			OsStr.utf8("adopt-agent-config"),
-		]),
+	run_agent_command!(
+		ip,
+		[
+			OsStr.utf8("chmod"),
+			OsStr.utf8("0600"),
+			OsStr.utf8("/home/aion/.config/aion/model-key.new"),
+			OsStr.utf8("/home/aion/.pi/agent/models.json.new"),
+			OsStr.utf8("/home/aion/.pi/agent/settings.json.new"),
+		],
 	)?
+	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/home/aion/.pi/agent/models.json.new"), OsStr.utf8("/home/aion/.pi/agent/models.json")])?
+	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/home/aion/.pi/agent/settings.json.new"), OsStr.utf8("/home/aion/.pi/agent/settings.json")])?
+	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/home/aion/.config/aion/model-key.new"), OsStr.utf8("/home/aion/.config/aion/model-key")])?
 	Ok({})
 }
 
@@ -944,7 +955,7 @@ create_project! = |name, project, machine| {
 			Ok({}) => AionState.save_project_image!({ image: built.identity, machine, project: built.project })?
 		}
 	}
-	create!(name, Bool.False, Bool.False)?
+	create!(name, Bool.False, machine == "gump")?
 	if machine == "gump" {
 		created = AionState.read_machine!(name)?
 		authorize_gump!(created.ip, "/run/current-system/sw/bin/gump")

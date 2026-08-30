@@ -123,13 +123,14 @@ create_project! = |entries, name, project, machine|
 		".kai/artifacts/aion",
 		["create", name, "--project", project, "--machine", machine],
 		[
+			("AION_MODEL_API_KEY", require_value(entries, "AION_MODEL_API_KEY")?),
 			("AWS_ACCESS_KEY_ID", require_value(entries, "AWS_ACCESS_KEY_ID")?),
 			("AWS_SECRET_ACCESS_KEY", require_value(entries, "AWS_SECRET_ACCESS_KEY")?),
 			("DIGITALOCEAN_SPACE_NAME", require_value(entries, "DIGITALOCEAN_SPACE_NAME")?),
 			("DIGITALOCEAN_SPACE_REGION", require_value(entries, "DIGITALOCEAN_SPACE_REGION")?),
 			("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?),
 		],
-		["AWS_SESSION_TOKEN", "AION_MODEL_API_KEY", "EVERPAID_API_KEY"],
+		["AWS_SESSION_TOKEN", "EVERPAID_API_KEY"],
 	)
 
 image_status! = |entries|
