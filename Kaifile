@@ -9,7 +9,7 @@ environment roc {
 
 task format {
   environment: "roc"
-  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion-run.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "src/Everpaid.roc", "src/EverpaidApi.roc"]
+  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion-run.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/Ansi.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "src/Everpaid.roc", "src/EverpaidApi.roc"]
 }
 
 environment cli {

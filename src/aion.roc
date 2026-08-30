@@ -14,6 +14,7 @@ import pf.Stdin
 import pf.Stdout
 
 import AionState
+import Ansi
 import DigitalOcean
 import DigitalOceanApi
 import Everpaid
@@ -1208,6 +1209,24 @@ resource_labels = |saved, pending, uncertain| {
 	if uncertain "${tracked},tracking-uncertain" else tracked
 }
 
+resource_label_color = |label|
+	if label.contains("uncertain") or label.contains("untracked") {
+		Ansi.red(label)
+	} else if label.contains("pending") {
+		Ansi.yellow(label)
+	} else {
+		Ansi.green(label)
+	}
+
+provider_status_color = |status|
+	if status == "active" or status == "available" {
+		Ansi.green(status)
+	} else if status == "deleted" or status == "error" {
+		Ansi.red(status)
+	} else {
+		Ansi.yellow(status)
+	}
+
 print_images! = |images, saved_id, pending_id, pending_tag, uncertain|
 	match images {
 		[] => Ok({})
@@ -1217,8 +1236,10 @@ print_images! = |images, saved_id, pending_id, pending_tag, uncertain|
 				Some(tag) => List.any(first.tags, |candidate| candidate == tag)
 				None => Bool.False
 			}
-			billing = if first.status == "deleted" "not-billable" else "potentially-billable-storage"
-			Stdout.line!("  ${U64.to_str(first.id)}  ${first.status}  ${first.name}  [${resource_labels(saved, pending, uncertain)}] ${billing}")?
+			billing = if first.status == "deleted" Ansi.dim("not-billable") else Ansi.yellow("potentially-billable-storage")
+			status = provider_status_color(first.status)
+			label = resource_label_color(resource_labels(saved, pending, uncertain))
+			Stdout.line!("  ${Ansi.dim(U64.to_str(first.id))}  ${status}  ${Ansi.cyan(first.name)}  [${label}] ${billing}")?
 			print_images!(rest, saved_id, pending_id, pending_tag, uncertain)
 		}
 	}
@@ -1233,8 +1254,11 @@ print_droplets! = |droplets, saved_ids, pending_id, pending_tag, uncertain|
 				None => Bool.False
 			}
 			addresses = Str.join_with(DigitalOcean.public_ipv4s(first), ",")
-			ip = if addresses.is_empty() "no-public-ip" else addresses
-			Stdout.line!("  ${U64.to_str(first.id)}  ${first.status}  ${first.name}  ${ip}  [${resource_labels(saved, pending, uncertain)}] billable-compute")?
+			ip = if addresses.is_empty() Ansi.red("no-public-ip") else Ansi.cyan(addresses)
+			status = provider_status_color(first.status)
+			label = resource_label_color(resource_labels(saved, pending, uncertain))
+			billing = Ansi.yellow("billable-compute")
+			Stdout.line!("  ${Ansi.dim(U64.to_str(first.id))}  ${status}  ${Ansi.cyan(first.name)}  ${ip}  [${label}] ${billing}")?
 			print_droplets!(rest, saved_ids, pending_id, pending_tag, uncertain)
 		}
 	}
@@ -1245,7 +1269,8 @@ print_ssh_keys! = |keys, saved_ids, uncertain|
 		[first, .. as rest] => {
 			if first.name.starts_with("aion-") {
 				saved = List.any(saved_ids, |id| id == first.id)
-				Stdout.line!("  ${U64.to_str(first.id)}  ${first.name}  [${resource_labels(saved, Bool.False, uncertain)}]")?
+				label = resource_label_color(resource_labels(saved, Bool.False, uncertain))
+				Stdout.line!("  ${Ansi.dim(U64.to_str(first.id))}  ${Ansi.cyan(first.name)}  [${label}]")?
 			}
 			print_ssh_keys!(rest, saved_ids, uncertain)
 		}
@@ -1288,38 +1313,38 @@ resources! = || {
 	}
 	has_pending_creation = AionState.has_pending_creation!()?
 	machine_tracking_uncertain = invalid_machine or (has_pending_creation and pending_droplet_tag == None)
-	Stdout.line!("DigitalOcean Aion resources")?
+	Stdout.line!(Ansi.heading("DigitalOcean Aion resources"))?
 	images_ok = match DigitalOceanApi.list_private_images_by_tag!("aion", auth) {
 		Err(_) => {
-			Stdout.line!("images: unavailable")?
+			Stdout.line!("${Ansi.bold("images:")} ${Ansi.red("unavailable")}")?
 			Bool.False
 		}
 		Ok(images) => {
-			Stdout.line!("images:")?
-			if images.is_empty() Stdout.line!("  none")? else print_images!(images, image, pending_image, pending_image_tag, image_tracking_uncertain)?
+			Stdout.line!(Ansi.bold("images:"))?
+			if images.is_empty() Stdout.line!(Ansi.dim("  none"))? else print_images!(images, image, pending_image, pending_image_tag, image_tracking_uncertain)?
 			Bool.True
 		}
 	}
 	droplets_ok = match DigitalOceanApi.list_droplets_by_tag!("aion", auth) {
 		Err(_) => {
-			Stdout.line!("droplets: unavailable")?
+			Stdout.line!("${Ansi.bold("droplets:")} ${Ansi.red("unavailable")}")?
 			Bool.False
 		}
 		Ok(droplets) => {
-			Stdout.line!("droplets:")?
-			if droplets.is_empty() Stdout.line!("  none")? else print_droplets!(droplets, machine_ids, pending_droplet, pending_droplet_tag, machine_tracking_uncertain)?
+			Stdout.line!(Ansi.bold("droplets:"))?
+			if droplets.is_empty() Stdout.line!(Ansi.dim("  none"))? else print_droplets!(droplets, machine_ids, pending_droplet, pending_droplet_tag, machine_tracking_uncertain)?
 			Bool.True
 		}
 	}
 	keys_ok = match DigitalOceanApi.list_ssh_keys!(auth) {
 		Err(_) => {
-			Stdout.line!("ssh keys: unavailable")?
+			Stdout.line!("${Ansi.bold("ssh keys:")} ${Ansi.red("unavailable")}")?
 			Bool.False
 		}
 		Ok(keys) => {
-			Stdout.line!("ssh keys:")?
+			Stdout.line!(Ansi.bold("ssh keys:"))?
 			aion_keys = keys.keep_if(|key| key.name.starts_with("aion-"))
-			if aion_keys.is_empty() Stdout.line!("  none")? else print_ssh_keys!(aion_keys, key_ids, machine_tracking_uncertain)?
+			if aion_keys.is_empty() Stdout.line!(Ansi.dim("  none"))? else print_ssh_keys!(aion_keys, key_ids, machine_tracking_uncertain)?
 			Bool.True
 		}
 	}
@@ -1330,11 +1355,11 @@ print_machine_snapshots! = |snapshots|
 	match snapshots {
 		[] => Ok({})
 		[InvalidMachine(name), .. as rest] => {
-			Stdout.line!("  ${name}: invalid local state")?
+			Stdout.line!(Ansi.red("  ${name}: invalid local state"))?
 			print_machine_snapshots!(rest)
 		}
 		[SavedMachine(machine), .. as rest] => {
-			Stdout.line!("  ${machine.name}: recorded id ${U64.to_str(machine.id)}, ip ${machine.ip}, operation ${machine.operation_tag}")?
+			Stdout.line!("  ${Ansi.cyan(machine.name)}: ${Ansi.green("recorded")}, id ${Ansi.dim(U64.to_str(machine.id))}, ip ${Ansi.cyan(machine.ip)}, operation ${Ansi.dim(machine.operation_tag)}")?
 			print_machine_snapshots!(rest)
 		}
 	}
@@ -1342,48 +1367,49 @@ print_machine_snapshots! = |snapshots|
 machines! = || {
 	machines = AionState.read_machines!()?
 	if machines.is_empty() {
-		Stdout.line!("No machines recorded.")
+		Stdout.line!(Ansi.dim("No machines recorded."))
 	} else {
-		Stdout.line!("Machines")?
+		Stdout.line!(Ansi.heading("Machines"))?
 		print_machine_snapshots!(machines)
 	}
 }
 
 print_pending! = |label, status| {
-	Stdout.line!("${label}:")?
-	Stdout.write!(status)?
+	Stdout.line!(Ansi.yellow("${label}:"))?
+	Stdout.write!(Ansi.yellow(status))?
 	if status.ends_with("\n") Ok({}) else Stdout.line!("")
 }
 
 status! = || {
-	Stdout.line!("Local Aion state (provider not queried)")?
+	Stdout.line!(Ansi.heading("Local Aion state"))?
+	Stdout.line!(Ansi.dim("Provider not queried"))?
 	match AionState.has_saved_image!() {
-		Err(_) => Stdout.line!("image: local state unreadable")?
-		Ok(Bool.False) => Stdout.line!("image: none recorded")?
+		Err(_) => Stdout.line!("${Ansi.bold("image:")} ${Ansi.red("local state unreadable")}")?
+		Ok(Bool.False) => Stdout.line!("${Ansi.bold("image:")} ${Ansi.dim("none recorded")}")?
 		Ok(Bool.True) => match AionState.read_image!() {
-			Err(_) => Stdout.line!("image: invalid local state")?
-			Ok(image) => Stdout.line!("image: recorded '${image.name}', id ${U64.to_str(image.id)}, operation ${image.operation_tag}")?
+			Err(_) => Stdout.line!("${Ansi.bold("image:")} ${Ansi.red("invalid local state")}")?
+			Ok(image) => Stdout.line!("${Ansi.bold("image:")} ${Ansi.green("recorded")} '${Ansi.cyan(image.name)}', id ${Ansi.dim(U64.to_str(image.id))}, operation ${Ansi.dim(image.operation_tag)}")?
 		}
 	}
 	machines = AionState.read_machines!()?
-	Stdout.line!("machines:")?
+	Stdout.line!(Ansi.bold("machines:"))?
 	if machines.is_empty() {
-		Stdout.line!("  none recorded")?
+		Stdout.line!(Ansi.dim("  none recorded"))?
 	} else {
 		print_machine_snapshots!(machines)?
 	}
 	if AionState.has_project_image!()? {
 		match AionState.read_project_image!() {
-			Err(_) => Stdout.line!("project image: invalid local state")?
-			Ok(project) => Stdout.line!("project image: machine ${project.machine}, project ${project.project}, build ${project.image}")?
+			Err(_) => Stdout.line!("${Ansi.bold("project image:")} ${Ansi.red("invalid local state")}")?
+			Ok(project) => Stdout.line!("${Ansi.bold("project image:")} machine ${Ansi.cyan(project.machine)}, project ${project.project}, build ${Ansi.dim(project.image)}")?
 		}
 	} else {
-		Stdout.line!("project image: none recorded")?
+		Stdout.line!("${Ansi.bold("project image:")} ${Ansi.dim("none recorded")}")?
 	}
 	if AionState.has_image_operation!()? {
-		Stdout.line!("image operation lock: active; inspect running processes before removing .aion/image.operation")?
+		Stdout.line!(Ansi.yellow("image operation lock: active; inspect running processes before removing .aion/image.operation"))?
 	} else {
-		Stdout.line!("image operation lock: none")?
+		Stdout.line!("${Ansi.bold("image operation lock:")} ${Ansi.dim("none")}")?
 	}
 	if AionState.has_pending_image!()? {
 		match AionState.read_pending_image_status!() {
@@ -1391,7 +1417,7 @@ status! = || {
 			Ok(pending) => print_pending!("pending image import", pending)?
 		}
 	} else {
-		Stdout.line!("pending image import: none")?
+		Stdout.line!("${Ansi.bold("pending image import:")} ${Ansi.dim("none")}")?
 	}
 	if AionState.has_pending_creation!()? {
 		match AionState.read_pending_creation_status!() {
@@ -1399,12 +1425,12 @@ status! = || {
 			Ok(pending) => print_pending!("pending machine create", pending)?
 		}
 	} else {
-		Stdout.line!("pending machine create: none")?
+		Stdout.line!("${Ansi.bold("pending machine create:")} ${Ansi.dim("none")}")?
 	}
 	match AionState.read_payment_reservation!()? {
-		None => Stdout.line!("payment reservation: none")
-		Some(name) if name.is_empty() => Stdout.line!("payment reservation: invalid")
-		Some(name) => Stdout.line!("payment reservation: machine ${name}")
+		None => Stdout.line!("${Ansi.bold("payment reservation:")} ${Ansi.dim("none")}")
+		Some(name) if name.is_empty() => Stdout.line!("${Ansi.bold("payment reservation:")} ${Ansi.red("invalid")}")
+		Some(name) => Stdout.line!("${Ansi.bold("payment reservation:")} machine ${Ansi.yellow(name)}")
 	}
 }
 
@@ -1441,25 +1467,25 @@ check! = |name| {
 	if machine.name != name {
 		return Err(MachineStateMismatch)
 	}
-	Stdout.line!("local: name ${machine.name}, id ${U64.to_str(machine.id)}, ip ${machine.ip}, operation ${machine.operation_tag}")?
+	Stdout.line!("${Ansi.bold("local:")} name ${Ansi.cyan(machine.name)}, id ${Ansi.dim(U64.to_str(machine.id))}, ip ${Ansi.cyan(machine.ip)}, operation ${Ansi.dim(machine.operation_tag)}")?
 	droplet = DigitalOceanApi.get_droplet!(machine.id, token!()?)?
 	addresses = DigitalOcean.public_ipv4s(droplet)
 	ip_list = Str.join_with(addresses, ",")
 	provider_ips = if ip_list.is_empty() "none" else ip_list
-	Stdout.line!("provider: name ${droplet.name}, status ${droplet.status}, ips ${provider_ips}")?
+	Stdout.line!("${Ansi.bold("provider:")} name ${Ansi.cyan(droplet.name)}, status ${provider_status_color(droplet.status)}, ips ${Ansi.cyan(provider_ips)}")?
 	has_aion_tag = List.any(droplet.tags, |tag| tag == "aion")
 	has_operation_tag = machine.operation_tag == "legacy-unknown" or List.any(droplet.tags, |tag| tag == machine.operation_tag)
 	ip_matches = List.any(addresses, |ip| ip == machine.ip)
 	if droplet.name != machine.name or droplet.status != "active" or !has_aion_tag or !has_operation_tag or !ip_matches {
-		Stdout.line!("ssh: skipped because local and provider state do not agree")?
+		Stdout.line!(Ansi.yellow("ssh: skipped because local and provider state do not agree"))?
 		Err(MachineStateMismatch)
 	} else {
 		match ssh_probe!(machine.ip) {
 			Err(error) => {
-				Stdout.line!("ssh: unreachable or host key not trusted")?
+				Stdout.line!(Ansi.red("ssh: unreachable or host key not trusted"))?
 				Err(error)
 			}
-			Ok({}) => Stdout.line!("ssh: reachable")
+			Ok({}) => Stdout.line!(Ansi.green("ssh: reachable"))
 		}
 	}
 }
@@ -1486,7 +1512,7 @@ image_status! = || {
 		AionState.read_pending_image_id!()?
 	}
 	image = DigitalOceanApi.get_image!(id, token!()?)?
-	Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) is ${image.status}")
+	Stdout.line!("image '${Ansi.cyan(image.name)}' (id ${Ansi.dim(U64.to_str(image.id))}) is ${provider_status_color(image.status)}")
 }
 
 image_reconcile_locked! = || {
