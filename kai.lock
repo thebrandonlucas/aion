@@ -1,18 +1,5 @@
 {
   "nodes": {
-    "kai-source-bitcoin-qr": {
-      "flake": false,
-      "locked": {
-        "lastModified": 499162500,
-        "narHash": "sha256-a9xwheteMpB0pb2jy/YD1Qad40RENF0BYDI+MWDpauU=",
-        "type": "tarball",
-        "url": "https://registry.npmjs.org/bitcoin-qr/-/bitcoin-qr-1.4.1.tgz"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://registry.npmjs.org/bitcoin-qr/-/bitcoin-qr-1.4.1.tgz"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1787498568,
@@ -61,17 +48,17 @@
         "type": "github"
       }
     },
-    "overlay0": {
+    "roc-overlay": {
       "inputs": {
         "nixpkgs": "nixpkgs_2",
         "nixpkgs-darwin": "nixpkgs-darwin"
       },
       "locked": {
-        "lastModified": 1787750198,
-        "narHash": "sha256-BO/i4/IyW4STyiFXP8lBooFqs3g8H0bRAUeBvbUhZCA=",
+        "lastModified": 1788021805,
+        "narHash": "sha256-k28YQbnl1ZkM4ru6/puTr5ogApA+hU30tgLGLxyqGus=",
         "owner": "thebrandonlucas",
         "repo": "roc-overlay",
-        "rev": "91373db042aaca0b9f2e82417533d03b42084803",
+        "rev": "835ef8d04f94abb907f43592966ec7449c275213",
         "type": "github"
       },
       "original": {
@@ -82,9 +69,8 @@
     },
     "root": {
       "inputs": {
-        "kai-source-bitcoin-qr": "kai-source-bitcoin-qr",
         "nixpkgs": "nixpkgs",
-        "overlay0": "overlay0"
+        "roc-overlay": "roc-overlay"
       }
     }
   },

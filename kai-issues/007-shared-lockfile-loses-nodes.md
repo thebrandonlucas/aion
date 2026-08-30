@@ -8,13 +8,15 @@ derived from the generated flake's inputs only. Generated flakes in this
 project have different inputs:
 
 - `.kai/roc-build/flake.nix` inputs: `nixpkgs`, `roc-overlay`
+- `.kai/flake.nix` inputs can additionally include declared source tarballs such as `bitcoin-qr`
 - `.kai/services/aion/flake.nix` inputs: `nixpkgs`, `kai`
 - `.kai/images/agent/flake.nix` inputs: `nixpkgs` and project overlays
 
-Running `./kai build aion` rewrites `kai.lock` for the Roc build. During
-`./kai image agent`, the service plan adds `kai`, then the standard image plan
-drops it again. The generated flake-local locks remain usable, but the checked-in
-shared lock represents only the last planned flake.
+Running `./kai build aion` rewrites `kai.lock` for the Roc build and drops
+`bitcoin-qr` after `./kai run format` added it. During `./kai image agent`, the
+service plan adds `kai`, then the standard image plan drops it again. The
+generated flake-local locks remain usable, but the checked-in shared lock
+represents only the last planned flake.
 
 ## Reproduction
 
