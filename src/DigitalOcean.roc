@@ -1,15 +1,15 @@
 # Pure DigitalOcean API JSON models and helpers.
 DigitalOcean := [].{
-	Image : { id : U64, name : Str, status : Str }
+	Image : { id : U64, name : Str, status : Str, tags : List(Str) }
 	ImageResponse : { image : Image }
 	ImagesResponse : { images : List(Image) }
 
-	SshKey : { id : U64, public_key : Str }
+	SshKey : { id : U64, name : Str, public_key : Str }
 	SshKeyResponse : { ssh_key : SshKey }
 	SshKeysResponse : { ssh_keys : List(SshKey) }
 
 	Network : { ip_address : Str, type : Str }
-	Droplet : { id : U64, name : Str, networks : { v4 : List(Network) }, status : Str }
+	Droplet : { id : U64, name : Str, networks : { v4 : List(Network) }, status : Str, tags : List(Str) }
 	DropletResponse : { droplet : Droplet }
 	DropletsResponse : { droplets : List(Droplet) }
 
@@ -21,10 +21,13 @@ DigitalOcean := [].{
 	droplet_create_body = |name, image_id, ssh_key_id, operation_tag|
 		{ image: image_id, name, region: "nyc3", size: "s-2vcpu-4gb", ssh_keys: [ssh_key_id], tags: ["aion", operation_tag] }
 
+	public_ipv4s = |droplet|
+		droplet.networks.v4.keep_if(|network| network.type == "public").map(|network| network.ip_address)
+
 	public_ipv4 : Droplet -> Try(Str, [NoPublicIpv4])
 	public_ipv4 = |droplet|
-		match droplet.networks.v4.keep_if(|network| network.type == "public") {
-			[first, ..] => Ok(first.ip_address)
+		match public_ipv4s(droplet) {
+			[first, ..] => Ok(first)
 			[] => Err(NoPublicIpv4)
 		}
 }

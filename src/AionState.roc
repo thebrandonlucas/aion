@@ -14,9 +14,15 @@ AionState := [].{
 
 	image_import_path = Path.utf8(".aion/image.pending")
 
-	machine_path = |name| Path.utf8(".aion/machines/${name}.json")
+	image_operation_path = Path.utf8(".aion/image.operation")
+
+	machine_directory = Path.utf8(".aion/machines")
+
+	machine_path = |name| Path.join(machine_directory, "${name}.json")
 
 	creation_path = Path.utf8(".aion/create.pending")
+
+	payment_reservation_path = Path.utf8(".aion/payments/reservation/machine")
 
 	has_saved_image! = || Path.exists!(image_path)
 
@@ -65,8 +71,21 @@ AionState := [].{
 
 	read_pending_image_operation_tag! = || {
 		operation_tag = Path.read_utf8!(Path.join(image_import_path, "operation-tag"))?.trim()
-		if operation_tag.is_empty() Ok("recovered-unknown") else Ok(operation_tag)
+		if operation_tag.is_empty() Err(InvalidPendingImageState) else Ok(operation_tag)
 	}
+
+	has_pending_image! = || Path.is_dir!(image_import_path)
+
+	begin_image_operation! = || {
+		Path.create_all!(Path.utf8(".aion"))?
+		Path.create_dir!(image_operation_path)
+	}
+
+	has_image_operation! = || Path.is_dir!(image_operation_path)
+
+	clear_image_operation! = || Path.delete_all!(image_operation_path)
+
+	read_pending_image_status! = || Path.read_utf8!(Path.join(image_import_path, "status"))
 
 	clear_image_import! = || Path.delete_all!(image_import_path)
 
@@ -151,11 +170,12 @@ AionState := [].{
 
 	save_image! = |state| {
 		Path.create_all!(Path.utf8(".aion"))?
-		Path.write_utf8!(image_path, Json.to_str(state))
+		temporary = Path.utf8(".aion/image.json.new")
+		Path.write_utf8!(temporary, Json.to_str(state))?
+		Path.rename!(temporary, image_path)
 	}
 
-	read_machine! = |name| {
-		text = Path.read_utf8!(machine_path(name))?
+	decode_machine = |text| {
 		decoded : Try(MachineState, _)
 		decoded = Json.parse(text)
 		match decoded {
@@ -170,6 +190,38 @@ AionState := [].{
 			}
 		}
 	}
+
+	read_machine! = |name| decode_machine(Path.read_utf8!(machine_path(name))?)
+
+	read_machine_paths! = |paths|
+		match paths {
+			[] => Ok([])
+			[first, .. as rest] => {
+				filename = Path.filename(first).map_ok(Path.display) ?? ""
+				remaining = read_machine_paths!(rest)?
+				if !filename.ends_with(".json") {
+					Ok(remaining)
+				} else {
+					name = Str.from_utf8_lossy(filename.to_utf8().drop_last(5))
+					snapshot = match Path.read_utf8!(first) {
+						Err(_) => InvalidMachine(name)
+						Ok(text) => match decode_machine(text) {
+							Err(_) => InvalidMachine(name)
+							Ok(state) if state.name == name => SavedMachine(state)
+							Ok(_) => InvalidMachine(name)
+						}
+					}
+					Ok([snapshot].concat(remaining))
+				}
+			}
+		}
+
+	read_machines! = ||
+		if Path.is_dir!(machine_directory)? {
+			read_machine_paths!(Path.list!(machine_directory)?)
+		} else {
+			Ok([])
+		}
 
 	save_machine! : MachineState => Try({}, _)
 	save_machine! = |state| {
@@ -188,6 +240,13 @@ AionState := [].{
 
 	read_project_image! : () => Try(ProjectImageState, _)
 	read_project_image! = || Json.parse(Path.read_utf8!(project_image_path)?)
+
+	read_payment_reservation! = ||
+		if Path.is_file!(payment_reservation_path)? {
+			Ok(Some(Path.read_utf8!(payment_reservation_path)?.trim()))
+		} else {
+			Ok(None)
+		}
 
 	delete_machine! = |name| Path.delete!(machine_path(name))
 }
