@@ -98,7 +98,11 @@ read_order! = |name| {
 save_order! : Order => Try({}, _)
 save_order! = |order| {
 	encoded = Json.to_str_try(order)?
-	Path.write_utf8!(order_path(order.machine), encoded)
+	path = order_path(order.machine)
+	unique = UnixTime.now!().nanos_since_epoch()
+	temporary = Path.utf8("${Path.display(path)}.${unique.to_str()}.new")
+	Path.write_utf8!(temporary, encoded)?
+	Path.rename!(temporary, path)
 }
 
 invoice_json = |invoice|
@@ -147,14 +151,43 @@ reserve_payment! = |name| {
 	Path.write_utf8!(Path.join(reservation_path, "machine"), name)
 }
 
-complete_invoice! = |order, context| {
-	if order.payment_id.is_empty() {
+issue_invoice! = |order, context| {
+	if !(payment_preflight!(context, order.machine)?) {
+		Err(PaymentPreflightFailed)
+	} else {
 		invoice = create_everpaid_invoice!(order, context)?
 		complete = { ..order, payment_id: invoice.id, bolt11: invoice.bolt11 }
 		save_order!(complete)?
 		Ok(complete)
+	}
+}
+
+complete_invoice! = |order, context| {
+	if order.payment_id.is_empty() {
+		issue_invoice!(order, context)
 	} else {
-		Ok(order)
+		payment = get_everpaid_payment!(order.payment_id, context)?
+		if payment.id != order.payment_id
+			or payment.amountSats != order.amount_sats
+				or payment.reference != order.reference
+					or !Everpaid.reference_matches_machine(payment.reference, order.machine) {
+			Err(PaymentDoesNotMatchOrder)
+		} else if payment.status == "expired" {
+			if !(payment_preflight!(context, order.machine)?) {
+				Err(PaymentPreflightFailed)
+			} else {
+				replacement = {
+					..order,
+					reference: "aion:${order.machine}:renew:${payment.id}",
+					payment_id: "",
+					bolt11: "",
+				}
+				save_order!(replacement)?
+				issue_invoice!(replacement, context)
+			}
+		} else {
+			Ok(order)
+		}
 	}
 }
 
@@ -265,7 +298,7 @@ machine_status! = |name, context, allow_provision| {
 					} else {
 						Ok(machine_json("settled", "Payment received; starting provisioning"))
 					}
-				"expired" => Ok(machine_json("expired", "Invoice expired; remove its local payment state to retry"))
+				"expired" => Ok(machine_json("expired", "Invoice expired; submit the form again for a replacement"))
 				"failed" => Ok(machine_json("failed", "Payment failed"))
 				_ => Ok(machine_json("pending", "Waiting for payment…"))
 			}
