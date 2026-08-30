@@ -1446,24 +1446,57 @@ shell! = |name, run_pi| {
 }
 
 image_status! = || {
-	saved = AionState.has_saved_image!()?
-	id = if saved {
+	id = if AionState.has_saved_image!()? {
 		image = AionState.read_image!()?
 		image.id
 	} else {
 		AionState.read_pending_image_id!()?
 	}
 	image = DigitalOceanApi.get_image!(id, token!()?)?
-	if !saved and image.status == "available" {
-		operation_tag = AionState.read_pending_image_operation_tag!()?
-		AionState.save_image!({ id: image.id, name: image.name, operation_tag })?
-		Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) is available; local image state recovered; pending source state retained for lifecycle cleanup")
+	Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) is ${image.status}")
+}
+
+image_reconcile_locked! = || {
+	if AionState.has_saved_image!()? {
+		Err(ImageAlreadyExists)
 	} else {
-		Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) is ${image.status}")
+		id = AionState.read_pending_image_id!()?
+		operation_tag = AionState.read_pending_image_operation_tag!()?
+		image = DigitalOceanApi.get_image!(id, token!()?)?
+		tags_match = List.any(image.tags, |tag| tag == "aion") and List.any(image.tags, |tag| tag == operation_tag)
+		if image.status != "available" {
+			Err(ImageNotAvailable(image.status))
+		} else if !tags_match {
+			Err(PendingImageDoesNotMatchProvider)
+		} else if AionState.has_saved_image!()? {
+			Err(ImageAlreadyExists)
+		} else {
+			AionState.save_image!({ id: image.id, name: image.name, operation_tag })?
+			status = match AionState.read_pending_image_status!() {
+				Ok(previous) => "${previous.trim()}\n"
+				Err(_) => "Operation tag ${operation_tag}\n"
+			}
+			match AionState.record_import_status!("${status}Image ID ${U64.to_str(image.id)} recovered into local state; pending source cleanup remains\n") {
+				Ok({}) => {}
+				Err(_) => Stderr.line!("warning: image state recovered but pending status could not be updated") ?? {}
+			}
+			Stdout.line!("image '${image.name}' (id ${U64.to_str(image.id)}) recovered; pending source state retained for lifecycle cleanup")
+		}
 	}
 }
 
-image_delete! = || {
+image_reconcile! = || {
+	AionState.begin_image_operation!()?
+	result = image_reconcile_locked!()
+	unlock = AionState.clear_image_operation!()
+	match (result, unlock) {
+		(Err(error), _) => Err(error)
+		(Ok({}), Err(error)) => Err(error)
+		(Ok({}), Ok({})) => Ok({})
+	}
+}
+
+image_delete_locked! = || {
 	candidate = if AionState.has_saved_image!()? {
 		image = AionState.read_image!()?
 		{ image, saved: Bool.True }
@@ -1489,6 +1522,17 @@ image_delete! = || {
 				Ok({})
 			}
 		}
+	}
+}
+
+image_delete! = || {
+	AionState.begin_image_operation!()?
+	result = image_delete_locked!()
+	unlock = AionState.clear_image_operation!()
+	match (result, unlock) {
+		(Err(error), _) => Err(error)
+		(Ok({}), Err(error)) => Err(error)
+		(Ok({}), Ok({})) => Ok({})
 	}
 }
 
