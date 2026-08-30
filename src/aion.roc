@@ -21,22 +21,55 @@ import EverpaidApi
 
 usage = Str.join_with(
 	[
+		"Aion - ad-hoc agent machines",
+		"",
 		"Usage: aion <command>",
-		"  aion image import <https-url>",
-		"  aion image import-local <path>",
-		"  aion image status",
-		"  aion image delete",
-		"  aion products",
-		"  aion create <name>",
-		"  aion create <name> <product>",
-		"  aion create <name> --project <directory> --machine <machine>",
-		"  aion recover <name> <droplet-id>",
-		"  aion deploy <machine> <artifact> [--project <directory>]",
-		"  aion <name> shell [pi]",
-		"  aion destroy <name>",
+		"",
+		"Commands:",
+		"  status      Overview of local Aion state",
+		"  resources   Inventory DigitalOcean resources",
+		"  machines    List saved machines",
+		"  machine     Inspect, connect to, or destroy one machine",
+		"  images      Manage the shared machine image",
+		"  products    List machine products",
+		"  create      Create or recover a machine",
+		"  deploy      Deploy an artifact to a machine",
+		"",
+		"Run 'aion help <command>' for details.",
 	],
 	"\n",
 )
+
+help = |topic|
+	match topic {
+		"" => usage
+		"status" => "Usage: aion status\n\nShow the saved image, machines, pending operations, and payment reservation without querying a provider."
+		"resources" => "Usage: aion resources\n\nList Aion-tagged DigitalOcean images, Droplets, and SSH keys with local tracking and billing labels."
+		"machines" => "Usage: aion machines\n\nList machines recorded in local Aion state. Use 'aion machine <name> status' to check one against DigitalOcean and SSH."
+		"machine" => "Usage: aion machine <name> <command>\n\nCommands:\n  status       Compare local and provider state and probe SSH\n  shell [pi]   Connect over SSH, optionally starting Pi\n  destroy      Delete the Droplet and local machine state"
+		"images" => "Usage: aion images <command>\n\nCommands:\n  status                 Show provider import status\n  import <https-url>     Import an HTTPS image\n  import-local <path>    Upload and import a local .qcow2 image\n  reconcile              Recover an available pending import\n  delete                 Delete the imported image"
+		"products" => "Usage: aion products\n\nList available machine products and prices."
+		"create" => "Usage:\n  aion create <name>\n  aion create <name> <product>\n  aion create <name> --project <directory> --machine <machine>\n  aion recover <name> <droplet-id>"
+		"deploy" => "Usage: aion deploy <machine> <artifact> [--project <directory>]"
+		_ => usage
+	}
+
+help_topic = |topic|
+	match topic {
+		"image" => "images"
+		"recover" => "create"
+		_ => topic
+	}
+
+is_help_topic = |topic|
+	List.any(["", "status", "resources", "machines", "machine", "images", "products", "create", "deploy"], |known| topic == known)
+
+print_help! = |topic| {
+	selected = help_topic(topic)
+	if is_help_topic(selected) Stdout.line!(help(selected)) else Err(UnknownCommand(topic))
+}
+
+is_help_flag = |argument| argument == "-h" or argument == "--help"
 
 is_name_alphanumeric = |byte|
 	(byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9')
@@ -1560,11 +1593,31 @@ destroy! = |name| {
 	}
 }
 
-main! = |args|
-	match args.drop_first(1).map(OsStr.display) {
+main! = |args| {
+	arguments = args.drop_first(1).map(OsStr.display)
+	if List.any(arguments, is_help_flag) {
+		topic = match arguments {
+			["-h", ..] | ["--help", ..] => ""
+			[first, ..] => first
+			[] => ""
+		}
+		print_help!(topic)
+	} else match arguments {
+		[] => print_help!("")
+		["help"] => print_help!("")
+		["help", topic, ..] => print_help!(topic)
+		["status"] => status!()
+		["resources"] => resources!()
+		["machines"] => machines!()
+		["images", "import", url] => image_import!(url)
+		["images", "import-local", path] => image_import_local!(Path.utf8(path))
+		["images", "status"] => image_status!()
+		["images", "reconcile"] => image_reconcile!()
+		["images", "delete"] => image_delete!()
 		["image", "import", url] => image_import!(url)
 		["image", "import-local", path] => image_import_local!(Path.utf8(path))
 		["image", "status"] => image_status!()
+		["image", "reconcile"] => image_reconcile!()
 		["image", "delete"] => image_delete!()
 		["products"] => products!()
 		["create", name] => create!(name, Bool.False, Bool.True)
@@ -1577,8 +1630,14 @@ main! = |args|
 		["payment-preflight", name] => payment_preflight!(name)
 		["deploy", machine, artifact] => deploy!(machine, artifact, ".")
 		["deploy", machine, artifact, "--project", project] => deploy!(machine, artifact, project)
+		["machine", name, "status"] => check!(name)
+		["machine", name, "shell"] => shell!(name, Bool.False)
+		["machine", name, "shell", "pi"] => shell!(name, Bool.True)
+		["machine", name, "destroy"] => destroy!(name)
+		[name, "check"] => check!(name)
 		[name, "shell"] => shell!(name, Bool.False)
 		[name, "shell", "pi"] => shell!(name, Bool.True)
 		["destroy", name] => destroy!(name)
 		_ => Stdout.line!(usage)
 	}
+}
