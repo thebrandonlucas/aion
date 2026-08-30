@@ -14,13 +14,17 @@ usage = Str.join_with(
 	[
 		"Usage: aion-run <command>",
 		"  aion-run shell",
+		"  aion-run status",
+		"  aion-run resources",
 		"  aion-run import-image",
 		"  aion-run image-status",
+		"  aion-run image-reconcile",
 		"  aion-run create-demo",
 		"  aion-run create-project <name> <project> <machine>",
 		"  aion-run deploy-project <name> <project> <artifact>",
 		"  aion-run shell-demo",
 		"  aion-run shell-pi-demo",
+		"  aion-run check-demo",
 		"  aion-run destroy-demo",
 		"  aion-run delete-image",
 		"  aion-run payment-preflight",
@@ -133,10 +137,25 @@ create_project! = |entries, name, project, machine|
 		["AWS_SESSION_TOKEN", "EVERPAID_API_KEY"],
 	)
 
-image_status! = |entries|
+status! = ||
 	run!(
 		".kai/artifacts/aion",
-		["image", "status"],
+		["status"],
+		[],
+		[
+			"AION_MODEL_API_KEY",
+			"AWS_ACCESS_KEY_ID",
+			"AWS_SECRET_ACCESS_KEY",
+			"AWS_SESSION_TOKEN",
+			"DIGITALOCEAN_TOKEN",
+			"EVERPAID_API_KEY",
+		],
+	)
+
+image_visibility! = |entries, arguments|
+	run!(
+		".kai/artifacts/aion",
+		arguments,
 		[("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?)],
 		[
 			"AWS_ACCESS_KEY_ID",
@@ -222,13 +241,17 @@ payment_server! = |entries|
 main! = |args|
 	match args.drop_first(1).map(OsStr.display) {
 		["shell"] => shell!(load_dotenv!()?)
+		["status"] => status!()
+		["resources"] => image_visibility!(load_dotenv!()?, ["resources"])
 		["import-image"] => import_image!(load_dotenv!()?)
-		["image-status"] => image_status!(load_dotenv!()?)
+		["image-status"] => image_visibility!(load_dotenv!()?, ["image", "status"])
+		["image-reconcile"] => image_visibility!(load_dotenv!()?, ["image", "reconcile"])
 		["create-demo"] => digitalocean_operation!(load_dotenv!()?, ["create", "demo"], Bool.True)
 		["create-project", name, project, machine] => create_project!(load_dotenv!()?, name, project, machine)
 		["deploy-project", name, project, artifact] => deploy_project!(name, project, artifact)
 		["shell-demo"] => shell_demo!(Bool.False)
 		["shell-pi-demo"] => shell_demo!(Bool.True)
+		["check-demo"] => image_visibility!(load_dotenv!()?, ["demo", "check"])
 		["destroy-demo"] => digitalocean_operation!(load_dotenv!()?, ["destroy", "demo"], Bool.False)
 		["delete-image"] => digitalocean_operation!(load_dotenv!()?, ["image", "delete"], Bool.False)
 		["payment-preflight"] => digitalocean_operation!(load_dotenv!()?, ["payment-preflight", "demo"], Bool.True)

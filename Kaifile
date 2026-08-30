@@ -57,9 +57,24 @@ task import-image {
   run: [".kai/artifacts/aion-run", "import-image"]
 }
 
+task status {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "status"]
+}
+
+task resources {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "resources"]
+}
+
 task image-status {
   environment: "cli"
   run: [".kai/artifacts/aion-run", "image-status"]
+}
+
+task image-reconcile {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "image-reconcile"]
 }
 
 task create-demo {
@@ -75,6 +90,11 @@ task shell-demo {
 task shell-pi-demo {
   environment: "cli"
   run: [".kai/artifacts/aion-run", "shell-pi-demo"]
+}
+
+task check-demo {
+  environment: "cli"
+  run: [".kai/artifacts/aion-run", "check-demo"]
 }
 
 task destroy-demo {
