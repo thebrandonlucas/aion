@@ -1148,6 +1148,289 @@ create_paid! = |name| {
 	}
 }
 
+saved_machine_ids = |snapshots|
+	match snapshots {
+		[] => []
+		[InvalidMachine(_), .. as rest] => saved_machine_ids(rest)
+		[SavedMachine(machine), .. as rest] => [machine.id].concat(saved_machine_ids(rest))
+	}
+
+saved_ssh_key_ids = |snapshots|
+	match snapshots {
+		[] => []
+		[InvalidMachine(_), .. as rest] => saved_ssh_key_ids(rest)
+		[SavedMachine(machine), .. as rest] => [machine.ssh_key_id].concat(saved_ssh_key_ids(rest))
+	}
+
+resource_labels = |saved, pending, uncertain| {
+	tracked = if saved and pending {
+		"saved,pending"
+	} else if saved {
+		"saved"
+	} else if pending {
+		"pending"
+	} else {
+		"untracked"
+	}
+	if uncertain "${tracked},tracking-uncertain" else tracked
+}
+
+print_images! = |images, saved_id, pending_id, pending_tag, uncertain|
+	match images {
+		[] => Ok({})
+		[first, .. as rest] => {
+			saved = saved_id == Some(first.id)
+			pending = pending_id == Some(first.id) or match pending_tag {
+				Some(tag) => List.any(first.tags, |candidate| candidate == tag)
+				None => Bool.False
+			}
+			billing = if first.status == "deleted" "not-billable" else "potentially-billable-storage"
+			Stdout.line!("  ${U64.to_str(first.id)}  ${first.status}  ${first.name}  [${resource_labels(saved, pending, uncertain)}] ${billing}")?
+			print_images!(rest, saved_id, pending_id, pending_tag, uncertain)
+		}
+	}
+
+print_droplets! = |droplets, saved_ids, pending_id, pending_tag, uncertain|
+	match droplets {
+		[] => Ok({})
+		[first, .. as rest] => {
+			saved = List.any(saved_ids, |id| id == first.id)
+			pending = pending_id == Some(first.id) or match pending_tag {
+				Some(tag) => List.any(first.tags, |candidate| candidate == tag)
+				None => Bool.False
+			}
+			addresses = Str.join_with(DigitalOcean.public_ipv4s(first), ",")
+			ip = if addresses.is_empty() "no-public-ip" else addresses
+			Stdout.line!("  ${U64.to_str(first.id)}  ${first.status}  ${first.name}  ${ip}  [${resource_labels(saved, pending, uncertain)}] billable-compute")?
+			print_droplets!(rest, saved_ids, pending_id, pending_tag, uncertain)
+		}
+	}
+
+print_ssh_keys! = |keys, saved_ids, uncertain|
+	match keys {
+		[] => Ok({})
+		[first, .. as rest] => {
+			if first.name.starts_with("aion-") {
+				saved = List.any(saved_ids, |id| id == first.id)
+				Stdout.line!("  ${U64.to_str(first.id)}  ${first.name}  [${resource_labels(saved, Bool.False, uncertain)}]")?
+			}
+			print_ssh_keys!(rest, saved_ids, uncertain)
+		}
+	}
+
+resources! = || {
+	auth = token!()?
+	has_image = AionState.has_saved_image!()?
+	image = match AionState.read_image!() {
+		Ok(saved) => Some(saved.id)
+		Err(_) => None
+	}
+	has_pending_image = AionState.has_pending_image!()?
+	pending_image = match AionState.read_pending_image_id!() {
+		Ok(id) => Some(id)
+		Err(_) => None
+	}
+	pending_image_tag = match AionState.read_pending_image_operation_tag!() {
+		Ok(tag) => Some(tag)
+		Err(_) => None
+	}
+	image_tracking_uncertain = (has_image and image == None) or (has_pending_image and pending_image_tag == None)
+	machines = AionState.read_machines!()?
+	invalid_machine = List.any(
+		machines,
+		|snapshot| match snapshot {
+			InvalidMachine(_) => Bool.True
+			SavedMachine(_) => Bool.False
+		},
+	)
+	machine_ids = saved_machine_ids(machines)
+	key_ids = saved_ssh_key_ids(machines)
+	pending_droplet = match AionState.read_pending_creation_id!() {
+		Ok(id) => Some(id)
+		Err(_) => None
+	}
+	pending_droplet_tag = match AionState.read_pending_creation_operation_tag!() {
+		Ok(tag) => Some(tag)
+		Err(_) => None
+	}
+	has_pending_creation = AionState.has_pending_creation!()?
+	machine_tracking_uncertain = invalid_machine or (has_pending_creation and pending_droplet_tag == None)
+	Stdout.line!("DigitalOcean Aion resources")?
+	images_ok = match DigitalOceanApi.list_private_images_by_tag!("aion", auth) {
+		Err(_) => {
+			Stdout.line!("images: unavailable")?
+			Bool.False
+		}
+		Ok(images) => {
+			Stdout.line!("images:")?
+			if images.is_empty() Stdout.line!("  none")? else print_images!(images, image, pending_image, pending_image_tag, image_tracking_uncertain)?
+			Bool.True
+		}
+	}
+	droplets_ok = match DigitalOceanApi.list_droplets_by_tag!("aion", auth) {
+		Err(_) => {
+			Stdout.line!("droplets: unavailable")?
+			Bool.False
+		}
+		Ok(droplets) => {
+			Stdout.line!("droplets:")?
+			if droplets.is_empty() Stdout.line!("  none")? else print_droplets!(droplets, machine_ids, pending_droplet, pending_droplet_tag, machine_tracking_uncertain)?
+			Bool.True
+		}
+	}
+	keys_ok = match DigitalOceanApi.list_ssh_keys!(auth) {
+		Err(_) => {
+			Stdout.line!("ssh keys: unavailable")?
+			Bool.False
+		}
+		Ok(keys) => {
+			Stdout.line!("ssh keys:")?
+			aion_keys = keys.keep_if(|key| key.name.starts_with("aion-"))
+			if aion_keys.is_empty() Stdout.line!("  none")? else print_ssh_keys!(aion_keys, key_ids, machine_tracking_uncertain)?
+			Bool.True
+		}
+	}
+	if images_ok and droplets_ok and keys_ok Ok({}) else Err(ResourceInventoryIncomplete)
+}
+
+print_machine_snapshots! = |snapshots|
+	match snapshots {
+		[] => Ok({})
+		[InvalidMachine(name), .. as rest] => {
+			Stdout.line!("  ${name}: invalid local state")?
+			print_machine_snapshots!(rest)
+		}
+		[SavedMachine(machine), .. as rest] => {
+			Stdout.line!("  ${machine.name}: recorded id ${U64.to_str(machine.id)}, ip ${machine.ip}, operation ${machine.operation_tag}")?
+			print_machine_snapshots!(rest)
+		}
+	}
+
+machines! = || {
+	machines = AionState.read_machines!()?
+	if machines.is_empty() {
+		Stdout.line!("No machines recorded.")
+	} else {
+		Stdout.line!("Machines")?
+		print_machine_snapshots!(machines)
+	}
+}
+
+print_pending! = |label, status| {
+	Stdout.line!("${label}:")?
+	Stdout.write!(status)?
+	if status.ends_with("\n") Ok({}) else Stdout.line!("")
+}
+
+status! = || {
+	Stdout.line!("Local Aion state (provider not queried)")?
+	match AionState.has_saved_image!() {
+		Err(_) => Stdout.line!("image: local state unreadable")?
+		Ok(Bool.False) => Stdout.line!("image: none recorded")?
+		Ok(Bool.True) => match AionState.read_image!() {
+			Err(_) => Stdout.line!("image: invalid local state")?
+			Ok(image) => Stdout.line!("image: recorded '${image.name}', id ${U64.to_str(image.id)}, operation ${image.operation_tag}")?
+		}
+	}
+	machines = AionState.read_machines!()?
+	Stdout.line!("machines:")?
+	if machines.is_empty() {
+		Stdout.line!("  none recorded")?
+	} else {
+		print_machine_snapshots!(machines)?
+	}
+	if AionState.has_project_image!()? {
+		match AionState.read_project_image!() {
+			Err(_) => Stdout.line!("project image: invalid local state")?
+			Ok(project) => Stdout.line!("project image: machine ${project.machine}, project ${project.project}, build ${project.image}")?
+		}
+	} else {
+		Stdout.line!("project image: none recorded")?
+	}
+	if AionState.has_image_operation!()? {
+		Stdout.line!("image operation lock: active; inspect running processes before removing .aion/image.operation")?
+	} else {
+		Stdout.line!("image operation lock: none")?
+	}
+	if AionState.has_pending_image!()? {
+		match AionState.read_pending_image_status!() {
+			Err(_) => Stdout.line!("pending image import: status unreadable")?
+			Ok(pending) => print_pending!("pending image import", pending)?
+		}
+	} else {
+		Stdout.line!("pending image import: none")?
+	}
+	if AionState.has_pending_creation!()? {
+		match AionState.read_pending_creation_status!() {
+			Err(_) => Stdout.line!("pending machine create: status unreadable")?
+			Ok(pending) => print_pending!("pending machine create", pending)?
+		}
+	} else {
+		Stdout.line!("pending machine create: none")?
+	}
+	match AionState.read_payment_reservation!()? {
+		None => Stdout.line!("payment reservation: none")
+		Some(name) if name.is_empty() => Stdout.line!("payment reservation: invalid")
+		Some(name) => Stdout.line!("payment reservation: machine ${name}")
+	}
+}
+
+ssh_probe! = |ip| {
+	exit_code = secretless_command(
+		"timeout",
+		[
+			"--kill-after=2s",
+			"12s",
+			"ssh",
+			"-o",
+			"BatchMode=yes",
+			"-o",
+			"ConnectTimeout=8",
+			"-o",
+			"ConnectionAttempts=1",
+			"-o",
+			"StrictHostKeyChecking=yes",
+			"-o",
+			"UpdateHostKeys=no",
+			"aion@${ip}",
+			"true",
+		],
+	)
+		.exec_exit_code!()?
+	if exit_code == 0 Ok({}) else Err(SshCheckFailed)
+}
+
+check! = |name| {
+	if !valid_name(name) {
+		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
+	}
+	machine = AionState.read_machine!(name)?
+	if machine.name != name {
+		return Err(MachineStateMismatch)
+	}
+	Stdout.line!("local: name ${machine.name}, id ${U64.to_str(machine.id)}, ip ${machine.ip}, operation ${machine.operation_tag}")?
+	droplet = DigitalOceanApi.get_droplet!(machine.id, token!()?)?
+	addresses = DigitalOcean.public_ipv4s(droplet)
+	ip_list = Str.join_with(addresses, ",")
+	provider_ips = if ip_list.is_empty() "none" else ip_list
+	Stdout.line!("provider: name ${droplet.name}, status ${droplet.status}, ips ${provider_ips}")?
+	has_aion_tag = List.any(droplet.tags, |tag| tag == "aion")
+	has_operation_tag = machine.operation_tag == "legacy-unknown" or List.any(droplet.tags, |tag| tag == machine.operation_tag)
+	ip_matches = List.any(addresses, |ip| ip == machine.ip)
+	if droplet.name != machine.name or droplet.status != "active" or !has_aion_tag or !has_operation_tag or !ip_matches {
+		Stdout.line!("ssh: skipped because local and provider state do not agree")?
+		Err(MachineStateMismatch)
+	} else {
+		match ssh_probe!(machine.ip) {
+			Err(error) => {
+				Stdout.line!("ssh: unreachable or host key not trusted")?
+				Err(error)
+			}
+			Ok({}) => Stdout.line!("ssh: reachable")
+		}
+	}
+}
+
 shell! = |name, run_pi| {
 	if !valid_name(name) {
 		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
