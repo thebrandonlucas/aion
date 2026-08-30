@@ -358,3 +358,54 @@ Before implementation, choose the initial curated model IDs and metadata. Also d
 - [PPQ API documentation](https://ppq.ai/api-docs)
 - Current Aion image configuration: `plugins/aion/AionPlugin.roc`
 - Current runtime handoff: `src/aion.roc`, `src/aion-init.roc`
+
+---
+
+# Research: Aion visibility commands
+
+## Question
+
+Which read-only CLI commands should expose Aion's local state, provider resources, pending operations, and machine health without obscuring recovery or billing risk?
+
+## Findings
+
+### Option 1: one comprehensive `status` command
+
+- Pros: easiest command to discover; can summarize the saved image, machine, pending operations, and provider state.
+- Cons: mixes local files, DigitalOcean API calls, and SSH probes; becomes slow and fails wholesale when credentials or networking are unavailable.
+- Source: `src/AionState.roc`, `src/DigitalOceanApi.roc`, `src/aion.roc`.
+
+### Option 2: layer state, provider inventory, and health
+
+- `aion status` reads local state and pending operation records without credentials or network access.
+- `aion resources` lists every provider resource tagged or named for Aion and marks saved, pending, and untracked resources.
+- `aion <name> check` verifies the saved Droplet against DigitalOcean, then performs one bounded SSH/guest readiness probe.
+
+- Pros: each command has one latency and failure model; local recovery information remains available during provider outages; `resources` directly exposes orphaned billable assets after local state loss.
+- Cons: users may need two commands to distinguish stale local state from a provider or guest failure.
+- Source: operation tags and pending guards in `src/aion.roc` and `src/AionState.roc`; tag-filtered provider APIs in `src/DigitalOceanApi.roc`.
+
+### Option 3: resource-specific inspection and logs
+
+Add commands such as `aion machine inspect`, `aion image inspect`, `aion operations`, and `aion <name> logs`.
+
+- Pros: room for extensive details and service diagnostics.
+- Cons: too much surface for the current one-machine MVP; generic logs have no clear meaning because project-defined machines do not share one service or session model.
+- Source: current fixed image/machine state in `src/AionState.roc`; project-defined machine support in `src/aion.roc`.
+
+## Recommendation
+
+Use Option 2, implemented incrementally:
+
+1. Add a fast, offline `aion status` first. Show saved image, saved machines, project-image provenance, payment reservation summary, and the exact contents of `.aion/image.pending/status` or `.aion/create.pending/status`. Never print secrets or BOLT11 invoices.
+2. Add `aion resources` next. Require `DIGITALOCEAN_TOKEN`; list Aion-tagged Droplets and images plus `aion-*` SSH keys, and classify each as `saved`, `pending`, or `untracked`. Put potentially billable Droplets and images first.
+3. Add `aion <name> check` last. Report local state, provider status/IP agreement, SSH reachability, and minimal guest readiness using strict time bounds.
+
+Keep all three observational: no writes, cleanup, retries of billable operations, or automatic state adoption. Move the current state-promoting behavior of `aion image status` into an explicit future `aion reconcile` command. Use concise human output first; add `--json` only when another program needs a stable schema. Defer `logs` until Aion owns a persistent agent/session service with a defined log source.
+
+## Sources
+
+- Local and pending state: `src/AionState.roc`
+- Existing image status and SSH checks: `src/aion.roc`
+- Provider inventory primitives: `src/DigitalOceanApi.roc`, `src/DigitalOcean.roc`
+- Current CLI shape and safety guidance: `README.md`, `plan.md`

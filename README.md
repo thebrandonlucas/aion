@@ -26,6 +26,16 @@ aion <command>
 
 The interactive shell receives every value in `.env`; exit it when finished.
 
+Visibility commands separate offline state, provider inventory, and machine health:
+
+```sh
+./kai run status       # local state only; does not read .env or use the network
+./kai run resources    # Aion-tagged DigitalOcean resources and local tracking labels
+./kai run check-demo   # provider identity, IP agreement, and one bounded SSH probe
+```
+
+`aion image status` is provider-backed but read-only. If a pending import later becomes available, `aion image reconcile` verifies its operation tags before recovering local image state. None of the visibility commands adopt, delete, or otherwise change resources.
+
 `workflow prepare` is the non-billable preparation command. It builds the CLI, environment launcher, initializer, and agent image; it does not contact DigitalOcean, Spaces, Everpaid, or model APIs.
 
 ## Test the full pipeline
@@ -115,7 +125,7 @@ Open <http://127.0.0.1:8000>. The page never receives `EVERPAID_API_KEY`; it cal
 
 The server and CLI share non-secret `.aion/` state relative to their current directory. Before issuing an invoice, the server reads `.aion/image.json`, checks local and DigitalOcean capacity, and atomically reserves the demo's single payment slot. A missing image file causes payment preflight to reject the request without creating an invoice. The server rechecks payment ID, machine reference, amount, and settlement immediately before provisioning.
 
-Everpaid order state and the global reservation are retained under `.aion/payments/`. Before deleting an expired order to reuse the demo, confirm its invoice did not settle. A failed or interrupted provisioning attempt intentionally requires manual inspection of `.aion/create.pending/`, DigitalOcean, and its payment markers before retrying; never clear a `provisioning` or `failed` marker blindly. A settled invoice removes the interactive create confirmation, so paying it can immediately start DigitalOcean billing.
+Everpaid order state and the global reservation are retained under `.aion/payments/`. Submitting the form again replaces an invoice only after Everpaid confirms the saved invoice expired; the reservation remains in place. A failed or interrupted provisioning attempt intentionally requires manual inspection of `.aion/create.pending/`, DigitalOcean, and its payment markers before retrying; never clear a `provisioning` or `failed` marker blindly. A settled invoice removes the interactive create confirmation, so paying it can immediately start DigitalOcean billing.
 
 ## Cost and secret safety
 
@@ -123,7 +133,7 @@ Everpaid order state and the global reservation are retained under `.aion/paymen
 - Each billable image-import or Droplet-create operation sends at most one POST. Aion does not send or assume an undocumented general idempotency header. Before that POST it persists and prints a unique `aion-image-*` or `aion-droplet-*` operation tag; successful resource state retains the same tag. Post-POST diagnostics are best-effort and state updates are attempted before output, so a closed output stream cannot skip reconciliation, persistence, or cleanup.
 - Only a `4xx` create/import response is a definitive rejection. A transport failure, `5xx` or other unexpected response, or accepted-response decode failure is uncertain and reconciled at most six times. Images use `GET /v2/images?tag_name=<operation-tag>&private=true&per_page=200`; Droplets use `GET /v2/droplets?tag_name=<operation-tag>&per_page=200`. The POST is never repeated. Any reconciled Droplet IDs are recorded, printed best-effort, and automatically deleted; failed reconciliation or deletion retains the operation tag, known IDs, and recovery instructions in the pending directory.
 - Before enrolling an SSH key or creating a Droplet, `create` queries `GET /v2/droplets?tag_name=aion&per_page=200` and refuses if any tagged Aion Droplet exists. This enforces the MVP maximum of one remote Aion VM after local state loss. `.aion/create.pending/` is also one atomic global local create guard, not a per-name guard.
-- Image readiness is polled at most 60 times and Droplet activation 40 times; API requests time out after 30 seconds. If an import outlasts the polling window, `run image-status` promotes a subsequently available pending image into local image state while retaining source-object recovery details for lifecycle cleanup. SSH readiness has 30 attempts capped at 20 seconds each, and each enrollment command is capped at 30 seconds.
+- Image readiness is polled at most 60 times and Droplet activation 40 times; API requests time out after 30 seconds. If an import outlasts the polling window, `run image-reconcile` verifies the pending operation tag and promotes a subsequently available image into local state while retaining source-object recovery details for lifecycle cleanup. SSH readiness has 30 attempts capped at 20 seconds each, and each enrollment command is capped at 30 seconds.
 - Local import uploads a uniquely named `aion-imports/` object with `public-read` ACL into the otherwise private Space. An uncertain upload is retained. After the image POST, the object is deleted immediately only for a definitive `4xx` rejection; unresolved/uncertain outcomes retain it. An accepted object is deleted normally only after image availability is confirmed. `.aion/image.pending/` retains non-secret operation status, the operation tag, Space/key details, and any known image ID when recovery is needed. `image delete` falls back to a pending image ID only when `.aion/image.json` is absent; a corrupt saved image file stops deletion. Pending state remains after image deletion for source-object recovery. Inspect the recorded resources, let the lifecycle rule clean a stale object if needed, and remove the guard only after both providers are resolved.
 - Any activation, SSH, key-enrollment, provisioning-state write, or machine-state save failure before create completes triggers one best-effort DELETE. If deletion is not confirmed, the error prints the Droplet ID and operation tag and retains the global guard for manual cleanup.
 - Machine names are validated as 1-63-character lowercase ASCII DNS labels before create, shell, or destroy uses them. `destroy` retains local state and prints the Droplet ID and operation tag when deletion is not confirmed. Imported images and `aion-<name>` SSH keys remain after successful destroy and are reported for cleanup.
