@@ -3,7 +3,8 @@ import pf.Path
 
 AionState := [].{
 	ImageState : { id : U64, name : Str, operation_tag : Str }
-	MachineState : { id : U64, ip : Str, name : Str, operation_tag : Str, ssh_key_id : U64 }
+	MachineState : { id : U64, ip : Str, name : Str, operation_tag : Str, operator_ssh_access : Bool, ssh_key_id : U64 }
+	PreviousMachineState : { id : U64, ip : Str, name : Str, operation_tag : Str, ssh_key_id : U64 }
 	LegacyImageState : { id : U64, name : Str }
 	LegacyMachineState : { id : U64, ip : Str, name : Str, ssh_key_id : U64 }
 	ProjectImageState : { image : Str, machine : Str, project : Str }
@@ -122,6 +123,11 @@ AionState := [].{
 
 	record_creation_status! = |status| write_creation_file!("status", status)
 
+	record_creation_access! = |operator_ssh_access, ssh_key_id| {
+		write_creation_file!("operator-ssh-access", if operator_ssh_access "true" else "false")?
+		write_creation_file!("ssh-key-id", U64.to_str(ssh_key_id))
+	}
+
 	record_created! = |droplet_id| {
 		write_creation_file!("droplet-id", U64.to_str(droplet_id))?
 		record_creation_status!("Droplet ID ${U64.to_str(droplet_id)}\n")
@@ -145,6 +151,22 @@ AionState := [].{
 	read_pending_creation_operation_tag! = || {
 		operation_tag = Path.read_utf8!(Path.join(creation_path, "operation-tag"))?.trim()
 		if operation_tag.is_empty() Err(InvalidPendingCreationState) else Ok(operation_tag)
+	}
+
+	has_pending_creation_access! = || {
+		has_operator = Path.is_file!(Path.join(creation_path, "operator-ssh-access"))?
+		has_key = Path.is_file!(Path.join(creation_path, "ssh-key-id"))?
+		if has_operator == has_key Ok(has_operator) else Err(InvalidPendingCreationState)
+	}
+
+	read_pending_creation_access! = || {
+		operator = Path.read_utf8!(Path.join(creation_path, "operator-ssh-access"))?.trim()
+		ssh_key_id = U64.from_str(Path.read_utf8!(Path.join(creation_path, "ssh-key-id"))?.trim())?
+		match operator {
+			"true" => Ok({ operator_ssh_access: Bool.True, ssh_key_id })
+			"false" => Ok({ operator_ssh_access: Bool.False, ssh_key_id })
+			_ => Err(InvalidPendingCreationState)
+		}
 	}
 
 	read_pending_creation_status! = || Path.read_utf8!(Path.join(creation_path, "status"))
@@ -181,11 +203,18 @@ AionState := [].{
 		match decoded {
 			Ok(state) => Ok(state)
 			Err(_) => {
-				legacy : Try(LegacyMachineState, _)
-				legacy = Json.parse(text)
-				match legacy {
-					Ok(state) => Ok({ id: state.id, ip: state.ip, name: state.name, operation_tag: "legacy-unknown", ssh_key_id: state.ssh_key_id })
-					Err(_) => Err(InvalidMachineState)
+				previous : Try(PreviousMachineState, _)
+				previous = Json.parse(text)
+				match previous {
+					Ok(state) => Ok({ id: state.id, ip: state.ip, name: state.name, operation_tag: state.operation_tag, operator_ssh_access: Bool.True, ssh_key_id: state.ssh_key_id })
+					Err(_) => {
+						legacy : Try(LegacyMachineState, _)
+						legacy = Json.parse(text)
+						match legacy {
+							Ok(state) => Ok({ id: state.id, ip: state.ip, name: state.name, operation_tag: "legacy-unknown", operator_ssh_access: Bool.True, ssh_key_id: state.ssh_key_id })
+							Err(_) => Err(InvalidMachineState)
+						}
+					}
 				}
 			}
 		}

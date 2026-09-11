@@ -11,9 +11,10 @@
     main { width: min(32rem, calc(100% - 2rem)); }
     section { padding: 1.5rem; border: 1px solid #444; border-radius: .75rem; background: #181818; }
     h1 { margin-top: 0; font-size: 1.6rem; }
-    label, input, button, a { display: block; box-sizing: border-box; width: 100%; }
-    input, button, a { margin-top: .5rem; padding: .75rem; border-radius: .4rem; font: inherit; }
-    input { border: 1px solid #555; background: #222; color: inherit; }
+    label, input, textarea, button, a { display: block; box-sizing: border-box; width: 100%; }
+    input, textarea, button, a { margin-top: .5rem; padding: .75rem; border-radius: .4rem; font: inherit; }
+    input, textarea { border: 1px solid #555; background: #222; color: inherit; }
+    textarea { min-height: 7rem; resize: vertical; }
     button, a { border: 0; background: #eee; color: #111; text-align: center; font-weight: 700; cursor: pointer; }
     a { text-decoration: none; }
     button:disabled { opacity: .55; cursor: wait; }
@@ -31,6 +32,9 @@
       <form id="machine-form">
         <label for="name">Machine name</label>
         <input id="name" name="name" pattern="[a-z0-9](?:[a-z0-9\x2d]{0,61}[a-z0-9])?" value="demo" required>
+        <label for="ssh-key">SSH public key</label>
+        <textarea id="ssh-key" name="ssh-key" placeholder="ssh-ed25519 AAAA…" spellcheck="false" required></textarea>
+        <p>Paste the output of <code>cat ~/.ssh/id_ed25519.pub</code>. Never paste your private key.</p>
         <button id="create" type="submit">Create payment</button>
       </form>
       <div id="checkout" hidden>
@@ -39,6 +43,10 @@
         <a id="wallet">Open Lightning wallet</a>
         <p>Or copy this invoice:</p>
         <code id="invoice"></code>
+      </div>
+      <div id="active" hidden>
+        <p>SSH</p><code id="ssh-command"></code>
+        <p>Zed</p><code id="zed-command"></code>
       </div>
       <p id="status" class="status" role="status"></p>
     </section>
@@ -68,7 +76,12 @@
           });
         }
         status.textContent = machine.message;
-        if (machine.status === 'active' || machine.status === 'failed' || machine.status === 'expired' || machine.status === 'consumed') {
+        if (machine.status === 'active') {
+          document.querySelector('#ssh-command').textContent = machine.sshCommand;
+          document.querySelector('#zed-command').textContent = machine.zedCommand;
+          document.querySelector('#active').hidden = false;
+          button.disabled = false;
+        } else if (machine.status === 'failed' || machine.status === 'expired' || machine.status === 'consumed') {
           button.disabled = false;
         } else {
           poll = setTimeout(() => watch(name), 2500);
@@ -88,7 +101,7 @@
         const payment = await request('/api/machines', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name })
+          body: JSON.stringify({ name, sshPublicKey: document.querySelector('#ssh-key').value })
         });
         document.querySelector('#amount').textContent = payment.amountSats + ' sats';
         const qr = document.createElement('bitcoin-qr');

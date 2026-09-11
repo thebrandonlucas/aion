@@ -9,7 +9,7 @@ environment roc {
 
 task format {
   environment: "roc"
-  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion-run.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/Ansi.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "src/Everpaid.roc", "src/EverpaidApi.roc"]
+  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion-run.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/Ansi.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "src/Everpaid.roc", "src/EverpaidApi.roc", "src/SshKey.roc"]
 }
 
 environment cli {
@@ -19,19 +19,19 @@ environment cli {
 
 build aion {
   environment: cli
-  source: "src/aion.roc"
+  run: ["roc", "build", "src/aion.roc", "--opt=size", "--output=aion"]
   output: "aion"
 }
 
 build aion-run {
   environment: cli
-  source: "src/aion-run.roc"
+  run: ["roc", "build", "src/aion-run.roc", "--opt=size", "--output=aion-run"]
   output: "aion-run"
 }
 
 build aion-init {
   environment: roc
-  source: "src/aion-init.roc"
+  run: ["roc", "build", "src/aion-init.roc", "--opt=size", "--output=aion-init"]
   output: "aion-init"
 }
 
@@ -43,78 +43,78 @@ environment web {
 build aion-web {
   environment: web
   inputs: ["bitcoin-qr"]
-  source: "src/aion-web.roc"
+  run: ["roc", "build", "src/aion-web.roc", "--opt=size", "--output=aion-web"]
   output: "aion-web"
 }
 
 task aion-shell {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "shell"]
+  run: [".kai/artifacts/builds/aion-run", "shell"]
 }
 
 task import-image {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "import-image"]
+  run: [".kai/artifacts/builds/aion-run", "import-image"]
 }
 
 task status {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "status"]
+  run: [".kai/artifacts/builds/aion-run", "status"]
 }
 
 task resources {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "resources"]
+  run: [".kai/artifacts/builds/aion-run", "resources"]
 }
 
 task image-status {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "image-status"]
+  run: [".kai/artifacts/builds/aion-run", "image-status"]
 }
 
 task image-reconcile {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "image-reconcile"]
+  run: [".kai/artifacts/builds/aion-run", "image-reconcile"]
 }
 
 task create-demo {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "create-demo"]
+  run: [".kai/artifacts/builds/aion-run", "create-demo"]
 }
 
 task shell-demo {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "shell-demo"]
+  run: [".kai/artifacts/builds/aion-run", "shell-demo"]
 }
 
 task shell-pi-demo {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "shell-pi-demo"]
+  run: [".kai/artifacts/builds/aion-run", "shell-pi-demo"]
 }
 
 task check-demo {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "check-demo"]
+  run: [".kai/artifacts/builds/aion-run", "check-demo"]
 }
 
 task destroy-demo {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "destroy-demo"]
+  run: [".kai/artifacts/builds/aion-run", "destroy-demo"]
 }
 
 task delete-image {
   environment: "cli"
-  run: [".kai/artifacts/aion-run", "delete-image"]
+  run: [".kai/artifacts/builds/aion-run", "delete-image"]
 }
 
 task payment-preflight {
   environment: "web"
-  run: [".kai/artifacts/aion-run", "payment-preflight"]
+  run: [".kai/artifacts/builds/aion-run", "payment-preflight"]
 }
 
 task payment-server {
   environment: "web"
-  run: [".kai/artifacts/aion-run", "payment-server"]
+  run: [".kai/artifacts/builds/aion-run", "payment-server"]
 }
 
 environment agent {
@@ -123,6 +123,8 @@ environment agent {
 
 service aion {
   artifact: "aion-init"
+  secrets: []
+  restart: on-failure
 }
 
 machine agent {

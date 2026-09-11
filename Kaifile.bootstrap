@@ -5,10 +5,10 @@ environment bootstrap {
 
 task format-plugin {
   environment: "bootstrap"
-  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc"]
+  run: ["roc", "fmt", "plugins/aion/AionBuildPlugin.roc", "plugins/aion/AionPlugin.roc", "src/aion-init.roc"]
 }
 
 task bootstrap-kai {
   environment: "bootstrap"
-  run: ["nix", "run", "github:thebrandonlucas/kai#xkai", "--", "build", "plugins/aion/AionPlugin.roc"]
+  run: ["nix", "run", "github:thebrandonlucas/kai#xkai", "--", "build", "plugins/aion/AionBuildPlugin.roc"]
 }

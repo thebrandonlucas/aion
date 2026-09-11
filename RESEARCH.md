@@ -409,3 +409,200 @@ Keep all three observational: no writes, cleanup, retries of billable operations
 - Existing image status and SSH checks: `src/aion.roc`
 - Provider inventory primitives: `src/DigitalOceanApi.roc`, `src/DigitalOcean.roc`
 - Current CLI shape and safety guidance: `README.md`, `plan.md`
+
+---
+
+# Research: phone agent UI and user-selected subdomains
+
+## Question
+
+How should Aion let a customer communicate with a persistent agent from a phone, and give each new workspace a chosen subdomain, without exposing pi or the VM directly to the public internet?
+
+Research checked 2026-09-03.
+
+## Findings
+
+### Option 1: central Aion control plane and private guest bridge — recommended
+
+Serve one installable PWA from `app.aion.sh`. The browser talks only to the authenticated Aion HTTPS API. A Roc service on each workspace owns a persistent `pi --mode rpc` child process, while the control plane reaches that service over a private DigitalOcean VPC connection or outbound tunnel.
+
+Pi's RPC mode already provides the required application protocol: prompts, steering, aborts, streamed text and tool events, session selection, model selection, and resumable entry reads. It is JSONL over stdin/stdout, not a network service, so the guest bridge must supervise it and expose only a narrow authenticated API.
+
+Use ordinary HTTP semantics before WebSockets:
+
+- `POST /machines/<id>/sessions/<id>/prompts` submits an idempotency-keyed message.
+- `GET /machines/<id>/sessions/<id>/entries?since=<entry-id>` restores state after reconnect.
+- Polling is enough for the first slice; SSE can stream events later and reconnect automatically.
+- Web Push can notify the user when `agent_settled` occurs.
+
+The agent continues on the VM when the phone locks, changes network, or closes the PWA. A service worker cannot be the agent supervisor or a durable WebSocket proxy: mobile browsers may terminate it at any time. The server and persisted Pi session must be the source of truth.
+
+**Pros**
+
+- Best phone UX: chat, tool activity, files/diffs, approve/abort, and notifications instead of a cramped terminal.
+- User authentication and workspace authorization stay centralized.
+- Pi and its model credential need no public listener.
+- Reconnect can use Pi's persistent session JSONL and stable entry IDs.
+- Desktop SSH remains available as a separate expert interface.
+
+**Cons**
+
+- Requires a durable multi-user control plane, guest bridge, process supervision, and an authenticated private transport.
+- The bridge must serialize commands per Pi process, deduplicate retried prompts, cap uploads/output, and recover a saved session after restart.
+- DigitalOcean VPC routing alone should not be treated as authentication; use per-machine mTLS or a narrowly scoped outbound tunnel.
+
+### Option 2: one HTTPS/tunnel endpoint per workspace
+
+Run the PWA API and bridge on the VM and map `<name>.aion.sh` through a Cloudflare Tunnel. `cloudflared` makes outbound-only connections, so inbound VM ports can remain closed. Cloudflare Access can provide browser identity and can also render SSH in a browser.
+
+**Pros**
+
+- No Aion data-plane proxy for agent traffic.
+- The workspace remains reachable without a public listener.
+- Browser SSH is available quickly as a fallback.
+
+**Cons**
+
+- Per-workspace tunnel credentials, hostname routes, access policy, and lifecycle must be provisioned and reconciled.
+- Authentication and frontend rollout are distributed across customer VMs unless Cloudflare owns them at the edge.
+- Browser SSH is a terminal, not a good primary phone interface, and does not provide an agent-specific reconnect/event model.
+- Adds substantial Cloudflare coupling to the product's core path.
+
+This is a reasonable prototype or ingress implementation, but not the product API boundary. Keep the browser-facing protocol agent-specific even if Cloudflare carries it.
+
+### Option 3: direct DNS and HTTPS to each Droplet
+
+After DigitalOcean assigns an IP, create an `A` record for `<name>.aion.sh` with `POST /v2/domains/aion.sh/records`, then run HTTPS and the agent bridge on that VM.
+
+**Pros**
+
+- Few central data-plane components.
+- Straightforward provider API operation; DigitalOcean exposes create/read/update/delete domain-record endpoints.
+
+**Cons**
+
+- Publicly exposes every workspace and duplicates TLS, authentication, rate limiting, patching, and abuse defenses.
+- DNS and certificate readiness enter every provisioning transaction.
+- Destroy/restore changes the ordinary Droplet IP unless another stable addressing scheme is added.
+- A wildcard TLS private key must never be copied to every customer VM; individual certificates or per-machine DNS-01 automation would be required.
+
+This is acceptable only for a tightly controlled proof, not the public product.
+
+## Subdomain design
+
+For Aion-owned names, configure wildcard DNS once rather than mutating DNS for every workspace:
+
+```text
+app.aion.sh          -> control plane and PWA
+*.aion.sh            -> shared ingress
+<chosen>.aion.sh     -> route selected by Host header and control-plane mapping
+```
+
+Provisioning should:
+
+1. Normalize and validate the requested name as a 1–63 character lowercase DNS label. Aion's current `valid_name` already implements this shape.
+2. Reserve the name atomically in durable control-plane storage before taking payment or creating a Droplet. DNS lookup is not a uniqueness lock.
+3. Bind the reserved name to the created workspace only after provider identity and guest enrollment are verified.
+4. Have ingress resolve `Host` through that mapping and reject unknown, suspended, or deleted names.
+5. Tombstone/release names according to a stated retention policy when a workspace is destroyed.
+
+A wildcard record can route every first-level name to one ingress, and a `*.aion.sh` certificate covers `<chosen>.aion.sh`. It does **not** cover `<app>.<chosen>.aion.sh`. For multiple applications per workspace, initially use one of:
+
+- flat hosts such as `<app>--<workspace>.apps.aion.sh`, covered by `*.apps.aion.sh`; or
+- paths under the workspace host when the application supports a path prefix.
+
+Per-workspace wildcards such as `*.<workspace>.aion.sh` require separate wildcard certificate coverage and DNS-01 automation. Defer that complexity. Customer-owned domains later require ownership verification and either guarded Caddy on-demand TLS or a managed custom-hostname product such as Cloudflare for SaaS.
+
+## Existing open-source interfaces
+
+Aion does not need to invent the first mobile agent client. The closest current projects are:
+
+| Project | License | Fit |
+| --- | --- | --- |
+| [PI WEB](https://github.com/jmfederico/pi-web) | MIT | Pi-specific web/PWA UI with persistent sessions, repositories, worktrees, files, terminals, and remote-machine federation. Strongest permissively licensed fit for Aion's current Pi runtime. |
+| [Paseo](https://github.com/getpaseo/paseo) | AGPL-3.0 | Mature daemon/client design with web, iOS/Android, desktop, CLI, Pi support, worktrees, diffs, voice, and direct or E2E-relay connectivity. Closest match to the complete desired experience. AGPL obligations matter if Aion modifies and serves it. |
+| [Happier](https://github.com/happier-dev/happier) | MIT | Self-hostable mobile/web/desktop client, machine daemon, relay, E2E encryption, and multiple agent backends including Pi. Attractive permissive multi-agent option; verify Pi feature parity in a live spike. |
+| [remote-pi](https://github.com/jacobaraujo7/remote_pi) | MIT | Small Pi extension plus phone app and self-hostable relay. Easy experiment, but its documented relay payloads are not currently end-to-end encrypted, so the relay operator can read them. |
+| [OpenCode web](https://opencode.ai/docs/web/) | MIT | Built-in responsive web interface and persistent server API if Aion is willing to use OpenCode instead of Pi. Must be placed behind stronger access control than exposed HTTP Basic Auth. |
+| [CloudCLI](https://github.com/siteboon/claudecodeui) | AGPL-3.0 | Mobile PWA/mini-IDE with files, Git, terminal, and several agents, but not a natural Pi-first choice. |
+
+These projects use the same basic architecture proposed above: a daemon runs beside the code and agent, while a phone/web client controls it directly or through a relay. Aion's differentiation can therefore remain machine provisioning, reproducible NixOS/Kai environments, payment, identity, safe networking, model access, and instant publishing rather than a new chat UI.
+
+## Recommendation
+
+First test an existing interface rather than build one:
+
+1. Spike **PI WEB** on the current Aion image for the smallest Pi-native, MIT-licensed path.
+2. Spike **Paseo** as the UX benchmark and as a possible dependency if AGPL is acceptable.
+3. Compare reconnect after phone suspension, process restart recovery, tool approvals, file/diff review, PWA installation, and operation through an outbound tunnel.
+4. Build a Roc bridge only if neither can satisfy Aion's authentication, provisioning, metering, or security boundary.
+
+The resulting product still has two interfaces to one persistent workspace:
+
+- **Desktop:** existing key-only SSH for full terminal/editor workflows.
+- **Phone:** an Aion PWA at `app.aion.sh`, backed by a persistent guest service wrapping `pi --mode rpc`.
+- **Published output:** the selected `<name>.aion.sh`, routed by a shared ingress to an explicitly published guest port.
+
+For the first product slice:
+
+1. Keep the current VM-per-user DigitalOcean model.
+2. Add one root-owned guest supervisor that starts one persistent Pi RPC session as the unprivileged `aion` user.
+3. Add prompt, status/history, abort, and completion endpoints; begin with POST plus bounded polling before SSE.
+4. Keep agent execution independent of browser connection and add push notifications only after reconnect is reliable.
+5. Put the PWA and authentication on the central control plane. Prefer passkeys or another account login with `Secure`, `HttpOnly`, same-site cookies; never keep a workspace bearer secret in a URL or browser local storage.
+6. Configure `*.aion.sh` once at shared ingress and treat the requested name as a database reservation, not a DNS provisioning operation.
+7. Route only a declared application port. Do not make the chosen public subdomain a generic proxy to arbitrary guest ports.
+
+Do not use IRC. Pi RPC already models agent state and streaming, while HTTPS works naturally with a PWA, authentication, reconnect, images, and structured tool events.
+
+## Current Aion gaps
+
+- `src/aion-web.roc` is a localhost payment demo. Provisioning is driven by page polling and local files, so it is not a durable public control plane.
+- `aion <name> shell pi` starts an interactive terminal process; there is no persistent agent service after disconnect.
+- `.aion/` local state and the one global reservation cannot represent multiple users or concurrent workspaces.
+- `DigitalOceanApi.roc` does not yet manage domain records, but wildcard shared ingress avoids putting DNS changes in the per-workspace critical path.
+- The feasibility of long-lived SSE or WebSocket responses in the selected Roc web platform is unverified. Bounded polling is the safe Roc-first proof.
+
+## Sources
+
+- Pi RPC protocol: `/home/blu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/rpc.md`
+- Pi session persistence: `/home/blu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/sessions.md` and `session-format.md`
+- Pi security boundary: `/home/blu/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/security.md`
+- Current payment page and machine lifecycle: `src/aion-web.roc`, `src/aion.html`, `src/aion.roc`
+- [MDN: offline and background PWA operation](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Offline_and_background_operation)
+- [MDN: using server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)
+- [Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/)
+- [Cloudflare browser-rendered terminal](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/non-http/browser-rendering/)
+- [Cloudflare wildcard DNS records](https://developers.cloudflare.com/dns/manage-dns-records/reference/wildcard-dns-records/)
+- [Cloudflare Universal SSL coverage](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/)
+- [DigitalOcean domain-record API](https://docs.digitalocean.com/reference/api/reference/domain-records)
+- [Let's Encrypt challenge types](https://letsencrypt.org/docs/challenge-types/)
+- [Caddy on-demand TLS](https://caddyserver.com/on-demand-tls)
+
+### Paseo licensing and Aion product integration
+
+Paseo's repository `LICENSE` is AGPLv3, despite a conflicting Apache 2.0 statement currently present on `paseo.sh`. Aion must pin a commit and follow the repository license for that source unless the maintainer clarifies or grants another license.
+
+AGPL permits charging for software and hosted services. Aion can sell VM time, storage, managed updates, backups, networking, support, and model credit while publishing its source. Safe compliance should include preserving notices, publishing the exact corresponding Paseo source and build inputs shipped in each image, and offering source for every modification to remote users. Whether tightly integrated non-Paseo components form one derivative work is legal advice; keeping Aion and Paseo as separate processes over Paseo's documented protocol reduces coupling but does not remove distribution obligations for the Paseo binary. Paseo's code license also does not grant trademark rights.
+
+Aion currently has no repository `LICENSE`, so it must add an explicit OSI-approved license before describing itself as open source.
+
+A CLI-only Paseo product is a contained extension, but not only a `product.json` entry:
+
+1. Pin Paseo's upstream flake as a Kai-managed source and compose its package/NixOS module into `machine paseo` alongside Pi and git.
+2. Run the Paseo daemon as the unprivileged workspace user with persistent `/home/aion/.paseo` state.
+3. Keep port 6767 closed when using Paseo's outbound E2E relay.
+4. Extend product metadata with capabilities such as Pi provisioning; current code hard-codes that behavior to the default agent and Gump paths.
+5. After creation, run `paseo daemon pair --relay` over the existing SSH provisioning channel and return its one-time QR/link to the customer.
+6. Perform one live phone reconnect/reboot/agent run before offering it.
+
+Paseo already publishes a Nix package and NixOS module, which lowers packaging risk. The likely Kai limitation is consuming an external flake package/module through an ordinary `Kaifile`; if that boundary is absent, record it under `kai-issues/` rather than hiding direct Nix in a task.
+
+The minimum intended user flow is:
+
+```text
+CLI: aion create <name> paseo -> scan/open pairing offer -> select Pi -> prompt
+Web: choose name + Paseo product -> pay -> scan/open pairing offer -> prompt
+```
+
+The CLI path fits the current product catalog. The web path is larger because `aion-web` currently purchases only the fixed default image and has one local reservation; it must bind product and price into the order, select the correct prebuilt image, and deliver the pairing offer only to the authenticated buyer. A production service should prebuild versioned product images instead of compiling and importing Paseo on each purchase.

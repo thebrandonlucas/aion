@@ -14,6 +14,7 @@ import http.Response
 import "aion.html" as page : List(U8)
 
 import Everpaid
+import SshKey
 
 Context : {
 	api_key : Str,
@@ -24,6 +25,15 @@ Context : {
 }
 
 Order : {
+	machine : Str,
+	reference : Str,
+	payment_id : Str,
+	bolt11 : Str,
+	amount_sats : U64,
+	ssh_public_key : Str,
+}
+
+LegacyOrder : {
 	machine : Str,
 	reference : Str,
 	payment_id : Str,
@@ -44,12 +54,14 @@ require_env! = |name| {
 	if value.trim().is_empty() Err(EmptyEnvironmentVariable(name)) else Ok(value)
 }
 
+optional_env! = |name| Env.var_str!(OsStr.utf8(name)) ?? ""
+
 init! : () => Try({ config : Server.Config, context : Context }, _)
 init! = || {
 	api_key = require_env!("EVERPAID_API_KEY")?
 	digitalocean_token = require_env!("DIGITALOCEAN_TOKEN")?
 	home = require_env!("HOME")?
-	model_api_key = require_env!("AION_MODEL_API_KEY")?
+	model_api_key = optional_env!("AION_MODEL_API_KEY")
 	path = require_env!("PATH")?
 	Path.create_all!(orders_root)?
 	Ok({ config: Server.default_config, context: { api_key, digitalocean_token, home, model_api_key, path } })
@@ -72,6 +84,13 @@ javascript! = |name|
 
 machine_json = |status, message| json(200, "{\"status\":\"${status}\",\"message\":\"${message}\"}")
 
+active_machine_json! = |name| {
+	_ = read_order!(name)?
+	machine : { ip : Str }
+	machine = Json.parse(Path.read_utf8!(Path.utf8(".aion/machines/${name}.json"))?)?
+	Ok(json(200, Json.to_str({ status: "active", message: "Machine is active", ip: machine.ip, sshCommand: "ssh aion@${machine.ip}", zedCommand: "zed ssh://aion@${machine.ip}:/home/aion" })))
+}
+
 order_path = |name| Path.join(orders_root, "${name}.json")
 
 marker_path = |name, marker| Path.join(orders_root, "${name}.${marker}")
@@ -89,10 +108,37 @@ valid_name = |name| {
 					and bytes.all(|byte| is_name_alphanumeric(byte) or byte == '-')
 }
 
+validate_ssh_key! = |submitted| {
+	key = SshKey.canonical(submitted)?
+	directory = Path.join(Env.temp_dir!(), "aion-public-key-${UnixTime.now!().nanos_since_epoch().to_str()}")
+	Path.create_dir!(directory)?
+	path = Path.join(directory, "key.pub")
+	result = {
+		Cmd.new_str("chmod").args_str(["0700", Path.display(directory)]).exec_cmd!()?
+		Path.write_utf8!(path, "${key}\n")?
+		code = Cmd.new_str("ssh-keygen").args_str(["-l", "-f", Path.display(path)]).exec_exit_code!()?
+		if code == 0 Ok(key) else Err(InvalidSshPublicKey("ssh-keygen rejected the public key"))
+	}
+	deleted = Path.delete_all!(directory)
+	match (result, deleted) {
+		(Err(error), _) => Err(error)
+		(Ok(_), Err(error)) => Err(error)
+		(Ok(valid), Ok({})) => Ok(valid)
+	}
+}
+
 read_order! = |name| {
+	text = Path.read_utf8!(order_path(name))?
 	decoded : Try(Order, _)
-	decoded = Json.parse(Path.read_utf8!(order_path(name))?)
-	decoded
+	decoded = Json.parse(text)
+	match decoded {
+		Ok(order) => Ok(order)
+		Err(_) => {
+			legacy : LegacyOrder
+			legacy = Json.parse(text)?
+			Ok({ amount_sats: legacy.amount_sats, bolt11: legacy.bolt11, machine: legacy.machine, payment_id: legacy.payment_id, reference: legacy.reference, ssh_public_key: "" })
+		}
+	}
 }
 
 save_order! : Order => Try({}, _)
@@ -196,17 +242,40 @@ create_invoice! = |request, context| {
 	request_body = request.body()
 	body = request_body.with_limit(1024).read_all!() ? |_| CreateInvoiceFailed
 	body_str = Str.from_utf8_lossy(body)
-	parsed : Try({ name : Str }, _)
+	parsed : Try({ name : Str, sshPublicKey : Str }, _)
 	parsed = Json.parse(body_str)
 	match parsed {
-		Err(_) => Ok(json(400, "{\"error\":\"Expected a JSON machine name\"}"))
-		Ok({ name }) => {
+		Err(_) => Ok(json(400, "{\"error\":\"Expected a machine name and SSH public key\"}"))
+		Ok({ name, sshPublicKey }) => {
+			ssh_public_key = match validate_ssh_key!(sshPublicKey) {
+				Ok(key) => key
+				Err(_) => return Ok(json(400, "{\"error\":\"Paste one usable ssh-ed25519 public key\"}"))
+			}
 			if !valid_name(name) {
 				Ok(json(400, "{\"error\":\"Use 1-63 lowercase letters, digits, or internal hyphens\"}"))
 			} else {
 				path = order_path(name)
 				order = if Path.exists!(path) ? |_| CreateInvoiceFailed {
-					read_order!(name) ? |_| CreateInvoiceFailed
+					existing = read_order!(name) ? |_| CreateInvoiceFailed
+					if existing.ssh_public_key.is_empty() {
+						if existing.payment_id.is_empty() {
+							rebound = { ..existing, ssh_public_key }
+							save_order!(rebound) ? |_| CreateInvoiceFailed
+							rebound
+						} else {
+							payment = get_everpaid_payment!(existing.payment_id, context)?
+							if payment.status != "expired" {
+								return Ok(json(409, "{\"error\":\"This existing invoice predates customer SSH keys\"}"))
+							}
+							rebound = { ..existing, ssh_public_key }
+							save_order!(rebound) ? |_| CreateInvoiceFailed
+							rebound
+						}
+					} else if existing.ssh_public_key != ssh_public_key {
+						return Ok(json(409, "{\"error\":\"This invoice is bound to a different SSH key\"}"))
+					} else {
+						existing
+					}
 				} else {
 					if !(payment_preflight!(context, name) ? |_| CreateInvoiceFailed) {
 						return Ok(json(409, "{\"error\":\"Aion cannot safely accept another machine payment\"}"))
@@ -222,6 +291,7 @@ create_invoice! = |request, context| {
 						payment_id: "",
 						bolt11: "",
 						amount_sats: Everpaid.machine_price_sats,
+						ssh_public_key,
 					}
 					save_order!(created) ? |_| CreateInvoiceFailed
 					created
@@ -240,13 +310,16 @@ finish_provision! = |name, succeeded| {
 	}
 	_ = Path.delete_empty!(lock) ?? {}
 	if succeeded {
-		Ok(machine_json("active", "Machine is active"))
+		active_machine_json!(name)
 	} else {
 		Ok(machine_json("failed", "Provisioning failed; inspect the Aion server output"))
 	}
 }
 
 provision! = |order, context| {
+	if order.ssh_public_key.is_empty() and context.model_api_key.trim().is_empty() {
+		return Ok(machine_json("failed", "This legacy order requires AION_MODEL_API_KEY before provisioning"))
+	}
 	lock = marker_path(order.machine, "provisioning")
 	if Path.is_dir!(lock)? {
 		Ok(machine_json("provisioning", "Payment received; machine is provisioning"))
@@ -275,7 +348,7 @@ machine_status! = |name, context, allow_provision| {
 	if !valid_name(name) or !Path.exists!(order_path(name))? {
 		Ok(json(404, "{\"error\":\"Machine payment not found\"}"))
 	} else if Path.exists!(Path.utf8(".aion/machines/${name}.json"))? {
-		Ok(machine_json("active", "Machine is active"))
+		active_machine_json!(name)
 	} else if Path.exists!(marker_path(name, "failed"))? {
 		Ok(machine_json("failed", "Provisioning failed; inspect the Aion server output"))
 	} else if Path.is_dir!(marker_path(name, "provisioning"))? {

@@ -5,6 +5,7 @@ import http.Request
 import http.Response
 
 import DigitalOcean
+import SshKey
 
 DigitalOceanApi := [].{
 	SshKeyResult : [RegisteredKey(DigitalOcean.SshKey), ReusedKey(DigitalOcean.SshKey)]
@@ -142,6 +143,12 @@ DigitalOceanApi := [].{
 
 	list_ssh_keys! = |token| list_ssh_key_pages!(token, 1)
 
+	same_ssh_key = |left, right|
+		match (SshKey.canonical(left), SshKey.canonical(right)) {
+			(Ok(a), Ok(b)) => a == b
+			_ => Bool.False
+		}
+
 	register_ssh_key! = |name, public_key, token| {
 		body : { name : Str, public_key : Str }
 		body = { name, public_key }
@@ -157,7 +164,7 @@ DigitalOceanApi := [].{
 			}
 			422 => {
 				keys = list_ssh_keys!(token)?
-				match keys.keep_if(|key| key.public_key.trim() == public_key.trim()) {
+				match keys.keep_if(|key| same_ssh_key(key.public_key, public_key)) {
 					[found, ..] => Ok(ReusedKey(found))
 					[] => Err(NoMatchingSshKey)
 				}

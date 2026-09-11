@@ -19,6 +19,7 @@ import DigitalOcean
 import DigitalOceanApi
 import Everpaid
 import EverpaidApi
+import SshKey
 
 usage = Str.join_with(
 	[
@@ -50,7 +51,7 @@ help = |topic|
 		"machine" => "Usage: aion machine <name> <command>\n\nCommands:\n  status       Compare local and provider state and probe SSH\n  shell [pi]   Connect over SSH, optionally starting Pi\n  destroy      Delete the Droplet and local machine state"
 		"images" => "Usage: aion images <command>\n\nCommands:\n  status                 Show provider import status\n  import <https-url>     Import an HTTPS image\n  import-local <path>    Upload and import a local .qcow2 image\n  reconcile              Recover an available pending import\n  delete                 Delete the imported image"
 		"products" => "Usage: aion products\n\nList available machine products and prices."
-		"create" => "Usage:\n  aion create <name>\n  aion create <name> <product>\n  aion create <name> --project <directory> --machine <machine>\n  aion recover <name> <droplet-id>"
+		"create" => "Usage:\n  aion create <name>\n  aion create <name> --ssh-public-key-file <path>\n  aion create <name> <product>\n  aion create <name> --project <directory> --machine <machine>\n  aion recover <name> <droplet-id>"
 		"deploy" => "Usage: aion deploy <machine> <artifact> [--project <directory>]"
 		_ => usage
 	}
@@ -475,6 +476,25 @@ secretless_command = |program, arguments|
 			]).concat([program]).concat(arguments),
 		)
 
+validate_ssh_key! = |submitted| {
+	key = SshKey.canonical(submitted)?
+	directory = Path.join(Env.temp_dir!(), "aion-public-key-${U64.to_str(Random.seed_u64!()?)}")
+	Path.create_dir!(directory)?
+	path = Path.join(directory, "key.pub")
+	result = {
+		secretless_command("chmod", ["0700", Path.display(directory)]).exec_cmd!()?
+		Path.write_utf8!(path, "${key}\n")?
+		code = secretless_command("ssh-keygen", ["-l", "-f", Path.display(path)]).exec_exit_code!()?
+		if code == 0 Ok(key) else Err(InvalidSshPublicKey("ssh-keygen rejected the public key"))
+	}
+	deleted = Path.delete_all!(directory)
+	match (result, deleted) {
+		(Err(error), _) => Err(error)
+		(Ok(_), Err(error)) => Err(error)
+		(Ok(valid), Ok({})) => Ok(valid)
+	}
+}
+
 # Cloud-init/metadata key install can lag droplet activation; retry ssh for a
 # bounded window before giving up.
 wait_for_ssh! = |ip, attempts_left| {
@@ -646,17 +666,9 @@ enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, s
 }
 
 ssh_key_identity = |key|
-	match key.split_on(" ").keep_if(|part| !part.is_empty()) {
-		["ssh-ed25519", encoded, ..] if encoded.to_utf8().len() >= 16 and encoded.to_utf8().all(
-			|byte|
-				(byte >= 'a' and byte <= 'z')
-					or (byte >= 'A' and byte <= 'Z')
-						or (byte >= '0' and byte <= '9')
-							or byte == '+'
-								or byte == '/'
-									or byte == '=',
-		) => Some("ssh-ed25519 ${encoded}")
-		_ => None
+	match SshKey.canonical(key) {
+		Ok(canonical) => Some(canonical)
+		Err(_) => None
 	}
 
 gump_public_key! = || {
@@ -768,16 +780,16 @@ resolve_droplet_post! = |auth, name, image_id, ssh_key_id, operation_tag| {
 	}
 }
 
-provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent| {
+provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, operator_ssh_access| {
 	AionState.record_created!(droplet.id)?
 	active = poll_droplet!(auth, droplet.id, 40)?
 	ip = DigitalOcean.public_ipv4(active) ? |_| DropletPollTimeout
 	if provision_agent {
 		enroll_agent_config!(ip, model_key)?
-	} else {
+	} else if operator_ssh_access {
 		wait_for_ssh!(ip, 30)?
 	}
-	AionState.save_machine!({ id: active.id, ip, name, operation_tag, ssh_key_id })?
+	AionState.save_machine!({ id: active.id, ip, name, operation_tag, operator_ssh_access, ssh_key_id })?
 	Ok(ip)
 }
 
@@ -800,7 +812,7 @@ cleanup_created! = |auth, droplet_id, operation_tag, failure| {
 	}
 }
 
-create! = |name, payment_authorized, provision_agent| {
+create! = |name, payment_authorized, provision_agent, requested_access_key| {
 	if !valid_name(name) {
 		Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
 	} else if AionState.has_machine!(name)? {
@@ -811,8 +823,13 @@ create! = |name, payment_authorized, provision_agent| {
 			Err(EmptyModelKey)
 		} else {
 			image = AionState.read_image!()?
-			home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
-			public_key = Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?.trim()
+			operator_ssh_access = requested_access_key.is_empty()
+			public_key = if operator_ssh_access {
+				home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
+				validate_ssh_key!(Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?)?
+			} else {
+				validate_ssh_key!(requested_access_key)?
+			}
 			if !payment_authorized {
 				confirm_operation!("This creates one s-2vcpu-4gb Droplet in nyc3 and starts hourly billing.", "create ${name}")?
 			}
@@ -849,8 +866,9 @@ create! = |name, payment_authorized, provision_agent| {
 				RegisteredKey(created) => created.id
 				ReusedKey(reused) => reused.id
 			}
+			AionState.record_creation_access!(operator_ssh_access, ssh_key_id)?
 			droplet = resolve_droplet_post!(auth, name, image.id, ssh_key_id, operation_tag)?
-			match provision_created!(auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent) {
+			match provision_created!(auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, operator_ssh_access) {
 				Err(error) => cleanup_created!(auth, droplet.id, operation_tag, error)
 				Ok(ip) => {
 					match AionState.clear_creation!() {
@@ -863,6 +881,11 @@ create! = |name, payment_authorized, provision_agent| {
 			}
 		}
 	}
+}
+
+create_with_key_file! = |name, path| {
+	key = Path.read_utf8!(Path.utf8(path))?
+	if key.trim().is_empty() Err(InvalidSshPublicKey("public key file is empty")) else create!(name, Bool.False, Bool.False, key)
 }
 
 kai_command! = |operator_directory| {
@@ -989,7 +1012,7 @@ create_project! = |name, project, machine| {
 			Ok({}) => AionState.save_project_image!({ image: built.identity, machine, project: built.project })?
 		}
 	}
-	create!(name, Bool.False, machine == "gump")?
+	create!(name, Bool.False, machine == "gump", "")?
 	if machine == "gump" {
 		created = AionState.read_machine!(name)?
 		authorize_gump!(created.ip, "/run/current-system/sw/bin/gump")
@@ -1005,8 +1028,8 @@ create_product! = |name, product_name| {
 
 operator_ssh_key! = |auth| {
 	home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
-	public_key = Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?.trim()
-	match DigitalOceanApi.list_ssh_keys!(auth)?.keep_if(|key| key.public_key.trim() == public_key) {
+	public_key = validate_ssh_key!(Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?)?
+	match DigitalOceanApi.list_ssh_keys!(auth)?.keep_if(|key| ssh_key_identity(key.public_key) == Some(public_key)) {
 		[first, ..] => Ok(first)
 		[] => Err(NoMatchingSshKey)
 	}
@@ -1039,19 +1062,25 @@ recover! = |name, id| {
 			return Err(PendingCreationTagDoesNotMatch)
 		}
 	}
-	ssh_key = operator_ssh_key!(auth)?
-	if AionState.has_project_image!()? {
-		project = AionState.read_project_image!()?
-		if project.machine == "gump" {
-			authorize_gump!(ip, "/run/current-system/sw/bin/gump")?
-		} else {
-			wait_for_ssh!(ip, 30)?
-		}
+	access = if AionState.has_pending_creation_access!()? {
+		AionState.read_pending_creation_access!()?
 	} else {
-		model_key = require_nonempty_env!("AION_MODEL_API_KEY", "needed to finish agent provisioning")?
-		enroll_agent_config!(ip, model_key)?
+		{ operator_ssh_access: Bool.True, ssh_key_id: operator_ssh_key!(auth)?.id }
 	}
-	AionState.save_machine!({ id, ip, name, operation_tag, ssh_key_id: ssh_key.id })?
+	if access.operator_ssh_access {
+		if AionState.has_project_image!()? {
+			project = AionState.read_project_image!()?
+			if project.machine == "gump" {
+				authorize_gump!(ip, "/run/current-system/sw/bin/gump")?
+			} else {
+				wait_for_ssh!(ip, 30)?
+			}
+		} else {
+			model_key = require_nonempty_env!("AION_MODEL_API_KEY", "needed to finish agent provisioning")?
+			enroll_agent_config!(ip, model_key)?
+		}
+	}
+	AionState.save_machine!({ id, ip, name, operation_tag, operator_ssh_access: access.operator_ssh_access, ssh_key_id: access.ssh_key_id })?
 	if AionState.has_pending_creation!()? {
 		AionState.clear_creation!()?
 	}
@@ -1149,13 +1178,6 @@ payment_preflight! = |name| {
 		return Err(MachineAlreadyExists("local machine state or a create operation already exists"))
 	}
 	_ = AionState.read_image!()?
-	model_key = require_nonempty_env!("AION_MODEL_API_KEY", "export a short-lived model API key")?
-	_ = model_key
-	home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
-	public_key = Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?.trim()
-	if public_key.is_empty() {
-		return Err(EmptySshPublicKey)
-	}
 	existing = DigitalOceanApi.list_droplets_by_tag!("aion", token!()?)?
 	if List.is_empty(existing) Ok({}) else Err(AionDropletAlreadyExists(resource_ids(existing)))
 }
@@ -1164,21 +1186,34 @@ create_paid! = |name| {
 	payment_id = require_nonempty_env!("AION_EVERPAID_PAYMENT_ID", "paid creates may only come from the Aion web server")?
 	everpaid_key = require_nonempty_env!("EVERPAID_API_KEY", "needed to verify settlement")?
 	payment = EverpaidApi.get_payment!(payment_id, everpaid_key)?
-	saved_order : Try({ payment_id : Str, reference : Str }, _)
-	saved_order = Json.parse(Path.read_utf8!(Path.utf8(".aion/payments/${name}.json"))?)
-	order = saved_order?
-	if payment.status != "settled"
-		or payment.amountSats != Everpaid.machine_price_sats
-			or order.payment_id != payment.id
-				or order.reference != payment.reference
-					or !Everpaid.reference_matches_machine(payment.reference, name) {
+	order_text = Path.read_utf8!(Path.utf8(".aion/payments/${name}.json"))?
+	saved_order : Try({ payment_id : Str, reference : Str, ssh_public_key : Str }, _)
+	saved_order = Json.parse(order_text)
+	order = match saved_order {
+		Ok(current) => current
+		Err(_) => {
+			legacy : { payment_id : Str, reference : Str }
+			legacy = Json.parse(order_text)?
+			{ payment_id: legacy.payment_id, reference: legacy.reference, ssh_public_key: "" }
+		}
+	}
+	access_key = if order.ssh_public_key.is_empty() "" else validate_ssh_key!(order.ssh_public_key)?
+	if access_key.is_empty() {
+		_ = require_nonempty_env!("AION_MODEL_API_KEY", "needed to provision this legacy order")?
+	}
+	if access_key != order.ssh_public_key
+		or payment.status != "settled"
+			or payment.amountSats != Everpaid.machine_price_sats
+				or order.payment_id != payment.id
+					or order.reference != payment.reference
+						or !Everpaid.reference_matches_machine(payment.reference, name) {
 		Err(PaymentNotAuthorized)
 	} else {
 		consumed = Path.utf8(".aion/payments/${name}.consumed")
 		Path.create_all!(Path.utf8(".aion/payments"))?
 		Path.create_dir!(consumed)?
 		Path.write_utf8!(Path.join(consumed, "payment-id"), payment_id)?
-		create!(name, Bool.True, Bool.True)
+		if access_key.is_empty() create!(name, Bool.True, Bool.True, "") else create!(name, Bool.True, Bool.False, access_key)
 	}
 }
 
@@ -1479,6 +1514,8 @@ check! = |name| {
 	if droplet.name != machine.name or droplet.status != "active" or !has_aion_tag or !has_operation_tag or !ip_matches {
 		Stdout.line!(Ansi.yellow("ssh: skipped because local and provider state do not agree"))?
 		Err(MachineStateMismatch)
+	} else if !machine.operator_ssh_access {
+		Stdout.line!(Ansi.dim("ssh: not probed; access belongs to the customer key"))
 	} else {
 		match ssh_probe!(machine.ip) {
 			Err(error) => {
@@ -1646,7 +1683,8 @@ main! = |args| {
 		["image", "reconcile"] => image_reconcile!()
 		["image", "delete"] => image_delete!()
 		["products"] => products!()
-		["create", name] => create!(name, Bool.False, Bool.True)
+		["create", name] => create!(name, Bool.False, Bool.True, "")
+		["create", name, "--ssh-public-key-file", path] => create_with_key_file!(name, path)
 		["create", name, product] => create_product!(name, product)
 		["create", name, "--project", project, "--machine", machine] => create_project!(name, project, machine)
 		["recover", name, id] => recover_argument!(name, id)

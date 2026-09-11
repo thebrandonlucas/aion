@@ -73,6 +73,13 @@ require_value = |entries, name|
 		_ => Err(DuplicateDotEnvValue(name))
 	}
 
+optional_value = |entries, name|
+	match entries.keep_if(|entry| entry.name == name) {
+		[{ value, .. }] => Ok(value)
+		[] => Ok("")
+		_ => Err(DuplicateDotEnvValue(name))
+	}
+
 unset_args = |names|
 	match names {
 		[] => []
@@ -225,7 +232,7 @@ payment_server! = |entries|
 		".kai/artifacts/aion-web",
 		[],
 		[
-			("AION_MODEL_API_KEY", require_value(entries, "AION_MODEL_API_KEY")?),
+			("AION_MODEL_API_KEY", optional_value(entries, "AION_MODEL_API_KEY")?),
 			("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?),
 			("EVERPAID_API_KEY", require_value(entries, "EVERPAID_API_KEY")?),
 		],
@@ -254,7 +261,7 @@ main! = |args|
 		["check-demo"] => image_visibility!(load_dotenv!()?, ["demo", "check"])
 		["destroy-demo"] => digitalocean_operation!(load_dotenv!()?, ["destroy", "demo"], Bool.False)
 		["delete-image"] => digitalocean_operation!(load_dotenv!()?, ["image", "delete"], Bool.False)
-		["payment-preflight"] => digitalocean_operation!(load_dotenv!()?, ["payment-preflight", "demo"], Bool.True)
+		["payment-preflight"] => digitalocean_operation!(load_dotenv!()?, ["payment-preflight", "demo"], Bool.False)
 		["payment-server"] => payment_server!(load_dotenv!()?)
 		_ => Stdout.line!(usage)
 	}
