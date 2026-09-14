@@ -73,42 +73,17 @@ List products or create a machine from one inside the Aion shell:
 ```sh
 ./kai workflow aion-shell
 aion products
-aion create demo gump
+aion create <machine-name> <product>
 ```
 
-The bundled `gump` entry resolves `../gump/Kaifile`. Creation asks that project's Kai binary to build `machine gump`, so the image contains a Gump binary built from the current adjacent Gump source.
-
-If creation was interrupted after DigitalOcean accepted the Droplet, a later create prints its ID, status, public IP, and exact recovery command. `aion recover <name> <droplet-id>` validates the provider name, active state, Aion operation tag, operator SSH key, and SSH access before restoring local machine state and finishing Gump authorization. Use `aion resources` for the complete provider inventory.
-
-## Create or deploy Gump from its Kaifile
-
-Gump owns a deploy-enabled project Kai, a reproducible `gump` build, and `machine gump`. Bootstrap its ignored project binary from the current Kai deploy worktree once and create a separate restricted SSH identity:
+An ordinary Kai project can also be created or deployed directly:
 
 ```sh
-cd ../gump
-nix run path:../kai-deploy -- -f Kaifile.bootstrap run bootstrap-kai
-ssh-keygen -t ed25519 -f ~/.ssh/gump_aion -C gump-aion
+aion create <machine-name> --project <directory> --machine <kai-machine>
+aion deploy <machine-name> <artifact> --project <directory>
 ```
 
-To build Gump's DigitalOcean image, import it, create `demo`, and authorize the restricted key:
-
-```sh
-./kai workflow create-aion
-```
-
-This is billable and preserves Aion's image-import and Droplet-create confirmations. It uses `../aion/.env` through Aion's Roc credential launcher. The MVP retains one imported-image slot; delete an existing imported image explicitly before creating from a different project machine.
-
-To build and deploy the current Gump artifact to an existing saved `demo` machine, atomically activate it through Kai, then authorize the same restricted key:
-
-```sh
-./kai workflow deploy-aion
-```
-
-Set `AION_ROOT` if Aion is not at `../aion`, and `AION_MACHINE` to select a saved machine other than `demo`. Gump remains reachable over SSH port 22 with its separate key:
-
-```sh
-ssh -i ~/.ssh/gump_aion -o IdentitiesOnly=yes aion@<machine-ip> repos
-```
+If creation was interrupted after DigitalOcean accepted the Droplet, a later create prints its ID, status, public IP, and exact recovery command. `aion recover <name> <droplet-id>` validates the provider name, active state, Aion operation tag, operator SSH key, and SSH access before restoring local machine state. Use `aion resources` for the complete provider inventory.
 
 ## Test Everpaid checkout
 

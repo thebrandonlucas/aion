@@ -1,7 +1,0 @@
-{
-  "title": "Gump",
-  "description": "A NixOS machine with the current Gump binary",
-  "priceSats": 0,
-  "project": "../../../gump",
-  "machine": "gump"
-}

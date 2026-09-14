@@ -671,56 +671,6 @@ ssh_key_identity = |key|
 		Err(_) => None
 	}
 
-gump_public_key! = || {
-	home = require_env!("HOME", "needed to locate ~/.ssh/gump_aion.pub")?
-	ssh = Path.join(Path.utf8(home), ".ssh")
-	public_key = Path.join(ssh, "gump_aion.pub")
-	operator_key = Path.join(ssh, "id_ed25519.pub")
-	if !Path.is_file!(public_key)? {
-		return Err(MissingGumpPublicKey("generate ~/.ssh/gump_aion and ~/.ssh/gump_aion.pub"))
-	}
-	gump_key = Path.read_utf8!(public_key)?.trim()
-	gump_identity = ssh_key_identity(gump_key)
-	if gump_identity == None {
-		return Err(InvalidGumpPublicKey)
-	}
-	if Path.is_file!(operator_key)? and ssh_key_identity(Path.read_utf8!(operator_key)?.trim()) == gump_identity {
-		return Err(GumpKeyMustBeSeparate("gump_aion.pub must differ from id_ed25519.pub"))
-	}
-	Ok(public_key)
-}
-
-authorize_gump! = |ip, executable| {
-	public_key = gump_public_key!()?
-	wait_for_ssh!(ip, 30)?
-	copy_agent_file!(ip, public_key, "~/.config/aion/gump-key.pub")?
-	exit_code = secretless_command(
-		"timeout",
-		[
-			"--kill-after=5s",
-			"30s",
-			"ssh",
-			"-o",
-			"BatchMode=yes",
-			"-o",
-			"ConnectTimeout=10",
-			"aion@${ip}",
-			executable,
-			"service",
-			"authorize",
-			"--root",
-			"/home/aion/.gump",
-			"--username",
-			"aion",
-			"--public-key",
-			"/home/aion/.config/aion/gump-key.pub",
-			"--yes",
-		],
-	)
-		.exec_exit_code!()?
-	if exit_code == 0 Ok({}) else Err(GumpAuthorizationFailed)
-}
-
 delete_reconciled_droplets! = |auth, droplets| {
 	match droplets {
 		[] => Ok({})
@@ -992,9 +942,6 @@ create_project! = |name, project, machine| {
 		return Err(InvalidMachineName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
 	}
 	project_create_preflight!(name)?
-	if machine == "gump" {
-		_ = gump_public_key!()?
-	}
 	built = build_project_image!(project, machine)?
 	if AionState.has_saved_image!()? {
 		saved = AionState.read_project_image!()?
@@ -1012,13 +959,7 @@ create_project! = |name, project, machine| {
 			Ok({}) => AionState.save_project_image!({ image: built.identity, machine, project: built.project })?
 		}
 	}
-	create!(name, Bool.False, machine == "gump", "")?
-	if machine == "gump" {
-		created = AionState.read_machine!(name)?
-		authorize_gump!(created.ip, "/run/current-system/sw/bin/gump")
-	} else {
-		Ok({})
-	}
+	create!(name, Bool.False, Bool.False, "")
 }
 
 create_product! = |name, product_name| {
@@ -1069,12 +1010,7 @@ recover! = |name, id| {
 	}
 	if access.operator_ssh_access {
 		if AionState.has_project_image!()? {
-			project = AionState.read_project_image!()?
-			if project.machine == "gump" {
-				authorize_gump!(ip, "/run/current-system/sw/bin/gump")?
-			} else {
-				wait_for_ssh!(ip, 30)?
-			}
+			wait_for_ssh!(ip, 30)?
 		} else {
 			model_key = require_nonempty_env!("AION_MODEL_API_KEY", "needed to finish agent provisioning")?
 			enroll_agent_config!(ip, model_key)?
@@ -1129,9 +1065,6 @@ deploy! = |machine_name, artifact, project| {
 		return Err(InvalidArtifactName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
 	}
 	machine = AionState.read_machine!(machine_name)?
-	if artifact == "gump" {
-		_ = gump_public_key!()?
-	}
 	operator_directory = Env.cwd!()?
 	project_directory = Path.utf8(project)
 	if !Path.is_dir!(project_directory)? {
@@ -1145,13 +1078,7 @@ deploy! = |machine_name, artifact, project| {
 	match (result, restore) {
 		(Err(error), _) => Err(error)
 		(Ok({}), Err(error)) => Err(error)
-		(Ok({}), Ok({})) => {
-			if artifact == "gump" {
-				authorize_gump!(machine.ip, "/home/aion/.local/state/kai/deployments/aion-gump/current")
-			} else {
-				Ok({})
-			}
-		}
+		(Ok({}), Ok({})) => Ok({})
 	}
 }
 
