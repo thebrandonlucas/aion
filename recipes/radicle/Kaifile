@@ -1,0 +1,13 @@
+environment rad {
+  packages: ["radicle"]
+}
+
+service {
+  # tODo setup radicle server in kaifile
+}
+
+machine server {
+  environment: "rad"
+  system: "x86_64-linux"
+  services: ["openssh"]
+}
