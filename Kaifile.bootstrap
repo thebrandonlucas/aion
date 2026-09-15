@@ -10,5 +10,5 @@ task format-plugin {
 
 task bootstrap-kai {
   environment: "bootstrap"
-  run: ["nix", "run", "github:thebrandonlucas/kai#xkai", "--", "build", "plugins/aion/AionBuildPlugin.roc"]
+  run: ["nix", "run", "github:thebrandonlucas/kai/master#xkai", "--", "build", "plugins/aion/AionBuildPlugin.roc"]
 }

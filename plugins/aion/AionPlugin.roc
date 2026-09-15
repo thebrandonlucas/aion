@@ -351,7 +351,7 @@ AionPlugin := [].{
 		[
 			"{",
 			"  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";",
-			"  inputs.kai.url = \"github:thebrandonlucas/kai\";",
+			"  inputs.kai.url = \"github:thebrandonlucas/kai/master\";",
 			"  inputs.kai.inputs.nixpkgs.follows = \"nixpkgs\";",
 			"  outputs = { nixpkgs, kai, ... }: let",
 			"    system = \"x86_64-linux\";",

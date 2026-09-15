@@ -8,10 +8,10 @@ Ad-hoc NixOS agent machines on DigitalOcean, defined in a `Kaifile` and operated
 2. Create one private, Standard DigitalOcean Space in `nyc3`, with versioning disabled and no public bucket policy or listing.
 3. Create a limited Spaces key with Read/Write/Delete access only to that Space. This is separate from the API token.
 4. With separate bucket-administrator credentials, configure an enabled lifecycle rule that expires the `aion-imports/` prefix after one day and aborts incomplete multipart uploads after one day. Verify the rule with DigitalOcean's [lifecycle instructions](https://docs.digitalocean.com/products/spaces/how-to/configure-lifecycle-rules/). The rule is a fallback for interrupted or uncertain cleanup, not the normal deletion path.
-5. Bootstrap the project Kai binary once, then use only Kai commands for operator workflows. Tasks enter their declared runtime environments and a Roc launcher reads the ignored `.env` file:
+5. Bootstrap the project Kai binary from the latest Kai `master`, then use only Kai commands for operator workflows. Tasks enter their declared runtime environments and a Roc launcher reads the ignored `.env` file:
 
 ```sh
-nix run github:thebrandonlucas/kai -- -f Kaifile.bootstrap run bootstrap-kai
+nix run github:thebrandonlucas/kai/master -- -f Kaifile.bootstrap run bootstrap-kai
 ./kai workflow prepare
 ```
 
@@ -42,7 +42,7 @@ Visibility commands separate offline state, provider inventory, and machine heal
 
 ```sh
 # Build the project Kai binary once.
-nix run github:thebrandonlucas/kai -- -f Kaifile.bootstrap run bootstrap-kai
+nix run github:thebrandonlucas/kai/master -- -f Kaifile.bootstrap run bootstrap-kai
 
 # Build the CLI and image, import it, then confirm availability.
 ./kai workflow import-image
