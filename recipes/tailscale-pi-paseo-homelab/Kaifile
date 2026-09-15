@@ -1,0 +1,19 @@
+environment dev {
+  packages: ["pi-dev", "paseo", ..]
+}
+
+# TODO: set this up so that it spins up a server that:
+- Has pi.dev and paseo on it
+- Has my PPQ_API_KEY secret on it
+- Has my pi.dev config on it 
+  (I can either supply it in a url file that it links to as a source,
+   or I can supply it locally and it includes it in this server, secrets
+   must be separate)
+- Has paseo server config installed on it.
+- Then it should be trivial for me to just talk to it over ssh or on my phone
+
+machine server {
+  environment: "rad"
+  system: "x86_64-linux"
+  services: ["openssh"]
+}
