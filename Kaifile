@@ -13,7 +13,7 @@ task format {
 }
 
 environment cli {
-  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "bashInteractive", "openssh", "coreutils", "awscli2", "nix", "nixos-rebuild"]
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "bashInteractive", "openssh", "coreutils", "rsync", "awscli2", "nix", "nixos-rebuild"]
   overlays: ["github:thebrandonlucas/roc-overlay"]
 }
 

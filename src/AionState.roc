@@ -122,7 +122,7 @@ AionState := [].{
 		Path.rename!(temporary, path)
 	}
 
-	begin_creation! = |name, operation_tag, project, provision_agent, region, size| {
+	begin_creation! = |name, operation_tag, project, provision_agent, provision_recipe, region, size| {
 		Path.create_all!(Path.utf8(".aion/machines"))?
 		# Directory creation is atomic, so concurrent local creates cannot POST.
 		Path.create_dir!(creation_path)?
@@ -138,6 +138,7 @@ AionState := [].{
 					write_creation_file!("machine", selected.machine)?
 					write_creation_file!("closure-path", selected.closure)?
 					write_creation_file!("provision-agent", if provision_agent "true" else "false")?
+					write_creation_file!("provision-recipe", if provision_recipe "true" else "false")?
 				}
 				None => {}
 			}
@@ -208,6 +209,19 @@ AionState := [].{
 			"false" => Ok(Bool.False)
 			_ => Err(InvalidPendingCreationState)
 		}
+
+	read_pending_creation_provision_recipe! = || {
+		path = Path.join(creation_path, "provision-recipe")
+		if Path.is_file!(path)? {
+			match Path.read_utf8!(path)?.trim() {
+				"true" => Ok(Bool.True)
+				"false" => Ok(Bool.False)
+				_ => Err(InvalidPendingCreationState)
+			}
+		} else {
+			Ok(Bool.False)
+		}
+	}
 
 	has_pending_creation_project! = || {
 		has_project = Path.is_file!(Path.join(creation_path, "project"))?

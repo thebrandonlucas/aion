@@ -19,7 +19,7 @@ service web {
   restart: on-failure
 }
 
-machine homelab {
+machine caddy-git-tmux {
   environment: homelab
   system: "x86_64-linux"
   services: ["openssh", "web"]

@@ -64,19 +64,28 @@ The commands prompt before importing an image, creating a Droplet, or deleting a
 
 Operator-owned creates register `~/.ssh/id_ed25519.pub`, boot `AION_SIZE` (default `s-2vcpu-4gb`) in `AION_REGION` (default `nyc3`), and activate the selected project machine with its local `kai`. The default agent create then transfers its model key and Pi configuration under `/root`. A create with `--ssh-public-key-file`, including a paid customer order, installs only that customer key: it does not install the operator key, activate a project, or provision a model. Model choices are runtime state, not part of the shared image. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
 
-## Product catalog
+## Recipe catalog
 
-Product metadata lives under `products/<name>/product.json`. It contains display and pricing data plus the path and machine name for an ordinary Kai project; it does not add product syntax to the project's `Kaifile`.
+A recipe is `recipes/<slug>/` with a `Kaifile`, a `README.md`, and any local sources it needs. Its Kaifile contains exactly one launchable machine named `<slug>`; the README's first `#` heading is its title. Aion sorts recipe slugs before assigning stable one-based indexes.
 
-List products or create a machine from one inside the Aion shell:
+Aion looks for `recipes` beside its executable by default. During development, or for any custom catalog, pass the directory explicitly:
 
 ```sh
 ./kai workflow aion-shell
-aion products
-aion create <machine-name> <product>
+aion recipes list --recipes recipes
+aion recipes show 2 --recipes recipes
+aion recipes launch 2 demo --recipes recipes
 ```
 
-An ordinary Kai project can also be created or deployed directly:
+Launch prints the README, builds the selected recipe, and asks for the normal billable-create confirmation. It installs a snapshot of the recipe and the same project Kai binary at `/root/aion/recipes/<slug>`. After connecting, edit the Kaifile and activate changes through Kai's Aion command, which retains the DigitalOcean boot and SSH configuration:
+
+```sh
+cd /root/aion/recipes/<slug>
+# edit Kaifile
+./kai aion-switch
+```
+
+An ordinary Kai project can still be created or deployed directly as a lower-level escape hatch:
 
 ```sh
 aion create <machine-name> --project <directory> --machine <kai-machine>
@@ -114,7 +123,7 @@ Everpaid order state and the global reservation are retained under `.aion/paymen
 - Before enrolling an SSH key or creating a Droplet, `create` queries `GET /v2/droplets?tag_name=aion&per_page=200` and refuses only if a same-name tagged Droplet exists. Sequential creates may retain multiple machines; `.aion/create.pending/` remains one atomic global local create guard.
 - Image readiness is polled at most 60 times and Droplet activation 40 times; API requests time out after 30 seconds. If an import outlasts the polling window, `run image-reconcile` verifies the pending operation tag and promotes a subsequently available image into local state while retaining source-object recovery details for lifecycle cleanup. SSH readiness has 30 attempts capped at 20 seconds each, and each enrollment command is capped at 30 seconds.
 - Local import uploads a uniquely named `aion-imports/` object with `public-read` ACL into the otherwise private Space. An uncertain upload is retained. After the image POST, the object is deleted immediately only for a definitive `4xx` rejection; unresolved/uncertain outcomes retain it. An accepted object is deleted normally only after image availability is confirmed. `.aion/image.pending/` retains non-secret operation status, the operation tag, Space/key details, and any known image ID when recovery is needed. `image delete` falls back to a pending image ID only when `.aion/image.json` is absent; a corrupt saved image file stops deletion. Pending state remains after image deletion for source-object recovery. Inspect the recorded resources, let the lifecycle rule clean a stale object if needed, and remove the guard only after both providers are resolved.
-- Operator-owned creates record the absolute project path, Kai machine, and exact GC-rooted closure under `.aion/create.pending/` before the Droplet POST. Recovery activates that closure rather than rebuilding changed project sources. Customer-key creates deliberately record no activation target. Any required whole-machine activation, SSH, key-enrollment, provisioning-state write, or machine-state save failure before create completes triggers one best-effort DELETE. If deletion is not confirmed, the error prints the Droplet ID and operation tag and retains the global guard for recovery.
+- Operator-owned creates record the absolute project path, Kai machine, and exact GC-rooted closure under `.aion/create.pending/` before the Droplet POST. Recipe launches also stage the recipe and Kai binary there, recursively excluding `.git`, `.kai`, `.env`, recipe-local `kai` files, and symbolic links, so recovery provisions the exact pre-POST snapshot rather than changed sources. Customer-key creates deliberately record no activation target. Any required whole-machine activation, recipe transfer, SSH, key-enrollment, provisioning-state write, or machine-state save failure before create completes triggers one best-effort DELETE. If deletion is not confirmed, the error prints the Droplet ID and operation tag and retains the global guard for recovery.
 - Machine names are validated as 1-63-character lowercase ASCII DNS labels before create, shell, or destroy uses them. `destroy` retains local state and prints the Droplet ID and operation tag when deletion is not confirmed. Imported images and `aion-<name>` SSH keys remain after successful destroy and are reported for cleanup.
 - Use only a public HTTPS image URL with no embedded credentials. The ignored `.env` uses one `KEY=value` entry per line. The Roc task launcher passes only each operation's required DigitalOcean, model, Everpaid, or Spaces credentials and removes unrelated inherited credentials, including `AWS_SESSION_TOKEN`. Values are never command arguments, logs, `.aion/` state, images, or API payloads. Default-agent configuration and model-key transfer use a private OS temporary directory, install mode-`0600` user files, and delete local staging best-effort.
 

@@ -33,7 +33,7 @@ usage = Str.join_with(
 		"  machines    List saved machines",
 		"  machine     Inspect, connect to, or destroy one machine",
 		"  images      Manage the shared machine image",
-		"  products    List machine products",
+		"  recipes     List, inspect, or launch machine recipes",
 		"  create      Create or recover a machine",
 		"  deploy      Activate a Kai machine on a saved machine",
 		"",
@@ -50,8 +50,8 @@ help = |topic|
 		"machines" => "Usage: aion machines\n\nList machines recorded in local Aion state. Use 'aion machine <name> status' to check one against DigitalOcean and SSH."
 		"machine" => "Usage: aion machine <name> <command>\n\nCommands:\n  status       Compare local and provider state and probe SSH\n  shell [pi]   Connect over SSH, optionally starting Pi\n  destroy      Delete the Droplet and local machine state"
 		"images" => "Usage: aion images <command>\n\nCommands:\n  build <machine>        Build the reusable DigitalOcean base image\n  status                 Show provider import status\n  import <https-url>     Import an HTTPS image\n  import-local <path>    Upload and import a local .qcow2 or .qcow2.gz image\n  reconcile              Recover an available pending import\n  delete                 Delete the imported image"
-		"products" => "Usage: aion products\n\nList available machine products and prices."
-		"create" => "Usage:\n  aion create <name>\n  aion create <name> --ssh-public-key-file <path>\n  aion create <name> <product>\n  aion create <name> --project <directory> --machine <machine>\n  aion recover <name> <droplet-id>"
+		"recipes" => "Usage:\n  aion recipes list [--recipes <directory>]\n  aion recipes show <index> [--recipes <directory>]\n  aion recipes launch <index> <machine-name> [--recipes <directory>]"
+		"create" => "Usage:\n  aion create <name>\n  aion create <name> --ssh-public-key-file <path>\n  aion create <name> --project <directory> --machine <machine>\n  aion recover <name> <droplet-id>"
 		"deploy" => "Usage: aion deploy <saved-machine> <kai-machine> [--project <directory>]"
 		_ => usage
 	}
@@ -64,7 +64,7 @@ help_topic = |topic|
 	}
 
 is_help_topic = |topic|
-	List.any(["", "status", "resources", "machines", "machine", "images", "products", "create", "deploy"], |known| topic == known)
+	List.any(["", "status", "resources", "machines", "machine", "images", "recipes", "create", "deploy"], |known| topic == known)
 
 print_help! = |topic| {
 	selected = help_topic(topic)
@@ -655,6 +655,24 @@ copy_agent_file! = |ip, source, destination|
 		]),
 	)
 
+copy_recipe_directory! = |ip, source, destination|
+	Cmd.exec!(
+		OsStr.utf8("env"),
+		secretless_os_env.concat([
+			OsStr.utf8("timeout"),
+			OsStr.utf8("--kill-after=30s"),
+			OsStr.utf8("30m"),
+			OsStr.utf8("scp"),
+			OsStr.utf8("-pr"),
+			OsStr.utf8("-o"),
+			OsStr.utf8("BatchMode=yes"),
+			OsStr.utf8("-o"),
+			OsStr.utf8("StrictHostKeyChecking=accept-new"),
+			Path.to_os_str(source),
+			OsStr.utf8("root@${ip}:${destination}"),
+		]),
+	)
+
 run_agent_command! = |ip, arguments|
 	Cmd.exec!(
 		OsStr.utf8("env"),
@@ -784,6 +802,31 @@ resolve_droplet_post! = |auth, name, image_id, ssh_key_ids, operation_tag, provi
 	}
 }
 
+parent_directory = |path| {
+	parent = Str.join_with(Path.display(path).split_on("/").drop_last(1), "/")
+	Path.utf8(if parent.is_empty() "/" else parent)
+}
+
+find_executable! = |directories, name, current_directory|
+	match directories {
+		[] => Ok(None)
+		[first, .. as rest] => {
+			base = if first.is_empty() {
+				current_directory
+			} else if first.starts_with("/") {
+				Path.utf8(first)
+			} else {
+				Path.join(current_directory, first)
+			}
+			candidate = Path.join(base, name)
+			if Path.is_executable!(candidate)? {
+				Ok(Some(Path.display(candidate)))
+			} else {
+				find_executable!(rest, name, current_directory)
+			}
+		}
+	}
+
 resolve_project! = |project, machine| {
 	if !valid_artifact(machine) {
 		return Err(InvalidMachineName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
@@ -801,14 +844,33 @@ resolve_project! = |project, machine| {
 		} else {
 			operator_kai = Path.join(operator_directory, "kai")
 			project_kai = Path.join(project_root, "kai")
+			adjacent_kai = Path.join(parent_directory(Env.exe_path!()?), "kai")
+			path_kai = find_executable!((Env.var_str!(OsStr.utf8("PATH")) ?? "").split_on(":"), "kai", project_root)?
 			kai = match Env.var_str!(OsStr.utf8("AION_KAI")) {
-				Ok(configured) if !configured.trim().is_empty() => configured
+				Ok(configured) if !configured.trim().is_empty() => {
+					configured_path = if configured.starts_with("/") Path.utf8(configured) else Path.join(project_root, configured)
+					if Path.is_executable!(configured_path)? {
+						Path.display(configured_path)
+					} else if !configured.contains("/") {
+						match find_executable!((Env.var_str!(OsStr.utf8("PATH")) ?? "").split_on(":"), configured, project_root)? {
+							Some(found) => found
+							None => configured
+						}
+					} else {
+						configured
+					}
+				}
 				_ => if Path.is_executable!(operator_kai)? {
 					Path.display(operator_kai)
+				} else if Path.is_executable!(adjacent_kai)? {
+					Path.display(adjacent_kai)
 				} else if Path.is_executable!(project_kai)? {
 					Path.display(project_kai)
 				} else {
-					"kai"
+					match path_kai {
+						Some(found) => found
+						None => "kai"
+					}
 				}
 			}
 			Ok({ kai, machine, path: Path.display(project_root) })
@@ -834,6 +896,9 @@ run_project_kai! = |project, arguments, failure| {
 		(Ok(_), Ok({})) => Err(failure)
 	}
 }
+
+validate_recipe! = |project|
+	run_project_kai!(project, ["aion-validate", project.machine], RecipeValidationFailed)
 
 validate_project! = |project| {
 	run_project_kai!(project, ["machine", project.machine], KaiMachineValidationFailed)?
@@ -1029,6 +1094,46 @@ prepare_project! = |project| {
 	Ok({ closure, kai: project.kai, machine: project.machine, path: project.path })
 }
 
+stage_pending_recipe! = |project| {
+	kai = Path.utf8(project.kai)
+	if !Path.is_executable!(kai)? {
+		return Err(RecipeKaiMissing(project.kai))
+	}
+	temporary = Path.join(Env.temp_dir!(), "aion-recipe-${U64.to_str(Random.seed_u64!()?)}")
+	Path.create_dir!(temporary)?
+	result = stage_pending_recipe_snapshot!(project, kai, temporary)
+	delete = Path.delete_all!(temporary)
+	match (result, delete) {
+		(Err(error), _) => Err(error)
+		(Ok({}), Err(error)) => Err(error)
+		(Ok({}), Ok({})) => Ok({})
+	}
+}
+
+stage_pending_recipe_snapshot! = |project, kai, temporary| {
+	secretless_command("chmod", ["0700", Path.display(temporary)]).exec_cmd!()?
+	snapshot = Path.join(temporary, "recipe")
+	Path.create_dir!(snapshot)?
+	sync_code = secretless_command(
+		"rsync",
+		[
+			"--archive",
+			"--no-links",
+			"--exclude=.git",
+			"--exclude=.kai",
+			"--exclude=.env",
+			"--exclude=kai",
+			"--",
+			"${project.path}/",
+			"${Path.display(snapshot)}/",
+		],
+	).exec_exit_code!()?
+	copy_kai_code = secretless_command("cp", ["--preserve=mode", "--", Path.display(kai), Path.display(Path.join(snapshot, "kai"))]).exec_exit_code!()?
+	destination = Path.join(Env.cwd!()?, ".aion/create.pending/recipe")
+	copy_snapshot_code = secretless_command("cp", ["--recursive", "--preserve=mode", "--", Path.display(snapshot), Path.display(destination)]).exec_exit_code!()?
+	if sync_code == 0 and copy_kai_code == 0 and copy_snapshot_code == 0 Ok({}) else Err(RecipeStagingFailed(project.machine))
+}
+
 pin_pending_closure! = |closure| {
 	root = Path.join(Env.cwd!()?, ".aion/create.pending/closure-root")
 	_ = secretless_command(
@@ -1058,6 +1163,22 @@ build_base_image! = |machine| {
 	} else {
 		Err(KaiMachineImageMissing(Path.display(image)))
 	}
+}
+
+provision_recipe! = |ip, machine| {
+	source = Path.join(Env.cwd!()?, ".aion/create.pending/recipe")
+	if !Path.is_dir!(source)? {
+		return Err(PendingRecipeMissing)
+	}
+	root = "/root/aion/recipes"
+	destination = "${root}/${machine}"
+	staged = "${destination}.new"
+	run_agent_command!(ip, [OsStr.utf8("mkdir"), OsStr.utf8("-p"), OsStr.utf8(root)])?
+	run_agent_command!(ip, [OsStr.utf8("rm"), OsStr.utf8("-rf"), OsStr.utf8(staged)])?
+	copy_recipe_directory!(ip, source, staged)?
+	run_agent_command!(ip, [OsStr.utf8("rm"), OsStr.utf8("-rf"), OsStr.utf8(destination)])?
+	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8(staged), OsStr.utf8(destination)])?
+	Stdout.line!("recipe installed at ${destination}; use ./kai aion-switch after editing its Kaifile")
 }
 
 activate_project! = |project, ip| {
@@ -1104,7 +1225,7 @@ activate_project! = |project, ip| {
 	if switch_code == 0 Ok({}) else Err(KaiMachineActivationFailed)
 }
 
-provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, operator_ssh_access, project, provider| {
+provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, provision_recipe, operator_ssh_access, project, provider| {
 	AionState.record_created!(droplet.id)?
 	active = poll_droplet!(auth, droplet.id, 40)?
 	if active.region.slug != provider.region or active.size_slug != provider.size {
@@ -1115,6 +1236,9 @@ provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag,
 		Some(selected) if operator_ssh_access => {
 			wait_for_ssh!(ip, 30)?
 			activate_project!(selected, ip)?
+			if provision_recipe {
+				provision_recipe!(ip, selected.machine)?
+			}
 			{ machine: selected.machine, project: selected.path }
 		}
 		_ => { machine: "", project: "" }
@@ -1145,7 +1269,7 @@ cleanup_created! = |auth, droplet_id, operation_tag, failure| {
 	}
 }
 
-create! = |name, payment_authorized, provision_agent, requested_access_key, project| {
+create! = |name, payment_authorized, provision_agent, provision_recipe, requested_access_key, project| {
 	operator_ssh_access = requested_access_key.is_empty()
 	if operator_ssh_access {
 		match project {
@@ -1191,13 +1315,19 @@ create! = |name, payment_authorized, provision_agent, requested_access_key, proj
 			}
 			auth = token!()?
 			operation_tag = operation_tag!("droplet")?
-			AionState.begin_creation!(name, operation_tag, prepared_project, provision_agent, provider.region, provider.size)?
+			AionState.begin_creation!(name, operation_tag, prepared_project, provision_agent, provision_recipe, provider.region, provider.size)?
 			match prepared_project {
-				Some(selected) => match pin_pending_closure!(selected.closure) {
-					Ok({}) => {}
-					Err(error) => {
-						AionState.clear_creation!() ?? {}
-						return Err(error)
+				Some(selected) => {
+					prepare_pending = match if provision_recipe stage_pending_recipe!(selected) else Ok({}) {
+						Ok({}) => pin_pending_closure!(selected.closure)
+						Err(error) => Err(error)
+					}
+					match prepare_pending {
+						Ok({}) => {}
+						Err(error) => {
+							AionState.clear_creation!() ?? {}
+							return Err(error)
+						}
 					}
 				}
 				None => {}
@@ -1235,7 +1365,7 @@ create! = |name, payment_authorized, provision_agent, requested_access_key, proj
 			}
 			AionState.record_creation_access!(operator_ssh_access, ssh_key_id)?
 			droplet = resolve_droplet_post!(auth, name, image.id, [ssh_key_id], operation_tag, provider)?
-			match provision_created!(auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, operator_ssh_access, prepared_project, provider) {
+			match provision_created!(auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, provision_recipe, operator_ssh_access, prepared_project, provider) {
 				Err(error) => cleanup_created!(auth, droplet.id, operation_tag, error)
 				Ok(ip) => {
 					match AionState.clear_creation!() {
@@ -1253,9 +1383,9 @@ create! = |name, payment_authorized, provision_agent, requested_access_key, proj
 create_agent! = |name, payment_authorized, requested_access_key, provision_agent| {
 	if requested_access_key.is_empty() {
 		project = resolve_project!(".", "agent")?
-		create!(name, payment_authorized, provision_agent, requested_access_key, Some(project))
+		create!(name, payment_authorized, provision_agent, Bool.False, requested_access_key, Some(project))
 	} else {
-		create!(name, payment_authorized, Bool.False, requested_access_key, None)
+		create!(name, payment_authorized, Bool.False, Bool.False, requested_access_key, None)
 	}
 }
 
@@ -1268,57 +1398,114 @@ create_with_key_file! = |name, path| {
 	}
 }
 
-Product : { description : Str, machine : Str, priceSats : U64, project : Str, title : Str }
+Recipe : { path : Str, readme : Str, slug : Str, title : Str }
 
-read_product! : Str => Try({ config : Product, project : Str }, _)
-read_product! = |name| {
-	if !valid_name(name) {
-		return Err(InvalidProductName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
-	}
-	product_directory = Path.join(Path.utf8("products"), name)
-	config : Product
-	config = Json.parse(Path.read_utf8!(Path.join(product_directory, "product.json"))?)?
-	if config.title.trim().is_empty() or config.description.trim().is_empty() or !valid_artifact(config.machine) {
-		return Err(InvalidProductMetadata(name))
-	}
-	project = Path.join(product_directory, config.project)
-	if !Path.is_file!(Path.join(project, "Kaifile"))? {
-		return Err(ProductKaifileMissing(name))
-	}
-	Ok({ config, project: Path.display(project) })
-}
-
-print_products! = |paths|
-	match paths {
-		[] => Ok({})
-		[first, .. as rest] => {
-			name = Path.filename(first).map_ok(Path.display) ?? ""
-			if Path.is_dir!(first)? and valid_name(name) and Path.is_file!(Path.join(first, "product.json"))? {
-				product = read_product!(name)?
-				price = if product.config.priceSats == 0 "free" else "${U64.to_str(product.config.priceSats)} sats"
-				Stdout.line!("${name}\t${price}\t${product.config.title} — ${product.config.description}")?
+compare_bytes = |left, right|
+	match (left, right) {
+		([], []) => Same
+		([], _) => Before
+		(_, []) => After
+		([left_byte, .. as left_rest], [right_byte, .. as right_rest]) =>
+			if left_byte < right_byte {
+				Before
+			} else if left_byte > right_byte {
+				After
+			} else {
+				compare_bytes(left_rest, right_rest)
 			}
-			print_products!(rest)
+		}
+
+read_recipe_title = |lines, slug|
+	match lines {
+		[] => Err(RecipeReadmeTitleMissing(slug))
+		[first, .. as rest] => {
+			trimmed = first.trim()
+			if trimmed.starts_with("# ") {
+				title = Str.from_utf8_lossy(trimmed.to_utf8().drop_first(2)).trim()
+				if title.is_empty() Err(RecipeReadmeTitleMissing(slug)) else Ok(title)
+			} else {
+				read_recipe_title(rest, slug)
+			}
 		}
 	}
 
-products! = || {
-	catalog = Path.utf8("products")
-	if !Path.is_dir!(catalog)? {
-		Err(ProductCatalogMissing("products"))
-	} else {
-		print_products!(Path.list!(catalog)?)
+read_recipe! = |path| {
+	slug = Path.filename(path).map_ok(Path.display) ?? ""
+	if !valid_name(slug) {
+		return Err(InvalidRecipeName(slug))
+	}
+	if !Path.is_file!(Path.join(path, "Kaifile"))? {
+		return Err(RecipeKaifileMissing(slug))
+	}
+	readme_path = Path.join(path, "README.md")
+	if !Path.is_file!(readme_path)? {
+		return Err(RecipeReadmeMissing(slug))
+	}
+	readme = Path.read_utf8!(readme_path)?
+	title = read_recipe_title(readme.split_on("\n"), slug)?
+	Ok({ path: Path.display(path), readme, slug, title })
+}
+
+read_recipes! = |paths|
+	match paths {
+		[] => Ok([])
+		[first, .. as rest] => {
+			remaining = read_recipes!(rest)?
+			slug = Path.filename(first).map_ok(Path.display) ?? ""
+			if Path.is_dir!(first)? and !slug.starts_with(".") {
+				Ok([read_recipe!(first)?].concat(remaining))
+			} else {
+				Ok(remaining)
+			}
+		}
+	}
+
+recipes_catalog! = |directory| {
+	if !Path.is_dir!(directory)? {
+		return Err(RecipeCatalogMissing(Path.display(directory)))
+	}
+	recipes = read_recipes!(Path.list!(directory)?)?
+	Ok(List.sort_with(recipes, |left, right| compare_bytes(left.slug.to_utf8(), right.slug.to_utf8())))
+}
+
+default_recipes_directory! = || Ok(Path.join(parent_directory(Env.exe_path!()?), "recipes"))
+
+print_recipes! = |recipes, index|
+	match recipes {
+		[] => Ok({})
+		[first, .. as rest] => {
+			Stdout.line!("${U64.to_str(index)}\t${first.slug}\t${first.title}")?
+			print_recipes!(rest, index + 1)
+		}
+	}
+
+recipe_at! = |directory, raw_index| {
+	index = U64.from_str(raw_index) ? |_| InvalidRecipeIndex(raw_index)
+	if index == 0 {
+		return Err(InvalidRecipeIndex(raw_index))
+	}
+	recipes = recipes_catalog!(directory)?
+	match recipes.get(index - 1) {
+		Ok(recipe) => Ok(recipe)
+		Err(_) => Err(RecipeIndexOutOfRange({ count: recipes.len(), index }))
 	}
 }
 
+recipes_list! = |directory| print_recipes!(recipes_catalog!(directory)?, 1)
+
+recipes_show! = |directory, index| Stdout.write!(recipe_at!(directory, index)?.readme)
+
 create_project! = |name, project, machine| {
 	selected = resolve_project!(project, machine)?
-	create!(name, Bool.False, Bool.False, "", Some(selected))
+	create!(name, Bool.False, Bool.False, Bool.False, "", Some(selected))
 }
 
-create_product! = |name, product_name| {
-	product = read_product!(product_name)?
-	create_project!(name, product.project, product.config.machine)
+recipes_launch! = |directory, index, name| {
+	recipe = recipe_at!(directory, index)?
+	Stdout.write!(recipe.readme)?
+	selected = resolve_project!(recipe.path, recipe.slug)?
+	validate_recipe!(selected)?
+	create!(name, Bool.False, Bool.False, Bool.True, "", Some(selected))
 }
 
 operator_ssh_key! = |auth| {
@@ -1389,12 +1576,16 @@ recover! = |name, id| {
 			return Err(DropletProviderMismatch({ actual_region: provider.region, actual_size: provider.size, expected_region: expected.region, expected_size: expected.size }))
 		}
 	}
+	provision_recipe = if has_pending AionState.read_pending_creation_provision_recipe!()? else Bool.False
 	recovered = if access.operator_ssh_access {
 		match project {
 			Some(selected) => {
 				model_key = if AionState.read_pending_creation_provision_agent!()? require_nonempty_env!("AION_MODEL_API_KEY", "needed to finish agent provisioning")? else ""
 				wait_for_ssh!(ip, 30)?
 				activate_project!(selected, ip)?
+				if provision_recipe {
+					provision_recipe!(ip, selected.machine)?
+				}
 				if !model_key.is_empty() {
 					enroll_agent_config!(ip, model_key)?
 				}
@@ -1995,10 +2186,14 @@ main! = |args| {
 		["image", "status"] => image_status!()
 		["image", "reconcile"] => image_reconcile!()
 		["image", "delete"] => image_delete!()
-		["products"] => products!()
+		["recipes", "list"] => recipes_list!(default_recipes_directory!()?)
+		["recipes", "list", "--recipes", directory] => recipes_list!(Path.utf8(directory))
+		["recipes", "show", index] => recipes_show!(default_recipes_directory!()?, index)
+		["recipes", "show", index, "--recipes", directory] => recipes_show!(Path.utf8(directory), index)
+		["recipes", "launch", index, name] => recipes_launch!(default_recipes_directory!()?, index, name)
+		["recipes", "launch", index, name, "--recipes", directory] => recipes_launch!(Path.utf8(directory), index, name)
 		["create", name] => create_agent!(name, Bool.False, "", Bool.True)
 		["create", name, "--ssh-public-key-file", path] => create_with_key_file!(name, path)
-		["create", name, product] => create_product!(name, product)
 		["create", name, "--project", project, "--machine", machine] => create_project!(name, project, machine)
 		["recover", name, id] => recover_argument!(name, id)
 		["create-paid", name] => create_paid!(name)

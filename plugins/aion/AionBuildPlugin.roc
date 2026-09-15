@@ -51,7 +51,11 @@ AionBuildPlugin := [].{
 
 	command_syntax = Plugin.command_syntax("build", [Plugin.required_argument("artifact")])
 	command = Plugin.command_with_block({ syntax: command_syntax, block: build_block })
-	schema = { blocks: [build_block, environment_block], commands: [command] }
+	switch_syntax = Plugin.command_syntax("aion-switch", [])
+	switch_command = Plugin.command_only(switch_syntax)
+	validate_syntax = Plugin.command_syntax("aion-validate", [Plugin.required_argument("machine")])
+	validate_command = Plugin.command_only(validate_syntax)
+	schema = { blocks: [build_block, environment_block], commands: [command, switch_command, validate_command] }
 
 	backend : Plugin.Backend
 	backend = Plugin.Backend.{
@@ -215,7 +219,69 @@ AionBuildPlugin := [].{
 			plan,
 			validator: NoValidation,
 		},
+		Plugin.Implementation.{
+			backend: backend.name,
+			command: switch_syntax.name,
+			plan: switch_plan,
+			validator: NoValidation,
+		},
+		Plugin.Implementation.{
+			backend: backend.name,
+			command: validate_syntax.name,
+			plan: validate_plan,
+			validator: NoValidation,
+		},
 	]
+
+	recipe_machine_name = |input| {
+		names = Plugin.effective_blocks_of_kind(input, ["machine"]).map(
+			|block|
+				match block.header {
+					["machine", found] | ["machine", found, _] => found
+					_ => ""
+				},
+		)
+		match names {
+			[first] => Ok(first)
+			_ => Err({ byte_offset: None, message: "Aion recipes require exactly one machine" })
+		}
+	}
+
+	validate_plan = |input| {
+		machine_name = AionBuildPlugin.recipe_machine_name(input)?
+		expected = match input.command_arguments {
+			[selected] => Ok(selected)
+			_ => Err({ byte_offset: None, message: "aion-validate requires one machine name" })
+		}?
+		if machine_name != expected {
+			return Err({ byte_offset: None, message: "Aion recipe machine '${machine_name}' must match directory slug '${expected}'" })
+		}
+		Ok(Plugin.BackendCommandPlan.{ artifacts: [], prerequisite_commands: [], requested_packages: [], steps: [] })
+	}
+
+	switch_plan = |input| {
+		machine_name = AionBuildPlugin.recipe_machine_name(input)?
+		directory = Plugin.workspace_path(input.workspace_root, "aion/local")
+		Ok(
+			Plugin.BackendCommandPlan.{
+				artifacts: [],
+				prerequisite_commands: [{ arguments: ["machine", backend.name, machine_name], description: "aion-switch: machine ${machine_name}" }],
+				requested_packages: [],
+				steps: [
+					RunProgram({ arguments: ["-p", directory], program: "mkdir" }),
+					RunProgram({ arguments: ["-rf", "${directory}/machine"], program: "rm" }),
+					RunProgram({ arguments: ["-RH", "--preserve=mode", "--", Plugin.workspace_path(input.workspace_root, "machines/${machine_name}"), "${directory}/machine"], program: "cp" }),
+					WriteFile({ contents: AionBuildPlugin.render_switch_flake(machine_name), path: "${directory}/flake.nix" }),
+					WriteFile({ contents: AionBuildPlugin.render_digital_ocean_module({}), path: "${directory}/digital-ocean.nix" }),
+				]
+					.concat(AionBuildPlugin.wrapper_lock_steps(directory))
+					.concat([
+						Confirm("WARNING: This will replace the running Aion system with machine '${machine_name}'.\nContinue? [y/N]"),
+						RunProgram({ arguments: ["switch", "--flake", "path:${directory}#${machine_name}", "--no-update-lock-file"], program: "nixos-rebuild" }),
+					]),
+			},
+		)
+	}
 
 	lock_steps = |directory| [
 		RunProgram({
@@ -227,6 +293,41 @@ AionBuildPlugin := [].{
 			program: "nix",
 		}),
 	]
+
+	wrapper_lock_steps = |directory| [
+		RunProgram({
+			arguments: ["flake", "lock", "path:${directory}", "--reference-lock-file", "Kaifile.lock", "--output-lock-file", "${directory}/flake.lock"],
+			program: "nix",
+		}),
+	]
+
+	render_switch_flake = |machine_name|
+		Str.join_with(
+			[
+				"{",
+				"  inputs.machine.url = \"path:./machine\";",
+				"  outputs = { machine, ... }: {",
+				"    nixosConfigurations.\"${machine_name}\" = machine.nixosConfigurations.\"${machine_name}\".extendModules {",
+				"      modules = [ ./digital-ocean.nix ];",
+				"    };",
+				"  };",
+				"}",
+			],
+			"\n",
+		)
+
+	render_digital_ocean_module = |_|
+		\\{ lib, modulesPath, ... }:
+		\\{
+		\\  imports = [ (modulesPath + "/virtualisation/digital-ocean-config.nix") ];
+		\\  boot.loader.grub.enable = lib.mkForce true;
+		\\  fileSystems."/" = lib.mkForce { device = "/dev/disk/by-label/nixos"; fsType = "ext4"; autoResize = true; };
+		\\  users.users.root.hashedPassword = "!";
+		\\  virtualisation.digitalOcean = { setRootPassword = false; setSshKeys = true; };
+		\\  services.openssh = { enable = true; settings = { KbdInteractiveAuthentication = false; PasswordAuthentication = false; PermitRootLogin = "prohibit-password"; }; };
+		\\  networking.firewall.allowedTCPPorts = [ 22 ];
+		\\  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+		\\}
 
 	render_flake = |sources, system| {
 		source_lines = sources.map(|source_input|
