@@ -219,11 +219,11 @@ AionBuildPlugin := [].{
 
 	lock_steps = |directory| [
 		RunProgram({
-			arguments: ["flake", "lock", "path:${directory}", "--reference-lock-file", "kai.lock", "--output-lock-file", "kai.lock"],
+			arguments: ["flake", "lock", "path:${directory}", "--reference-lock-file", "Kaifile.lock", "--output-lock-file", "Kaifile.lock"],
 			program: "nix",
 		}),
 		RunProgram({
-			arguments: ["flake", "lock", "path:${directory}", "--reference-lock-file", "kai.lock", "--output-lock-file", "${directory}/flake.lock"],
+			arguments: ["flake", "lock", "path:${directory}", "--reference-lock-file", "Kaifile.lock", "--output-lock-file", "${directory}/flake.lock"],
 			program: "nix",
 		}),
 	]

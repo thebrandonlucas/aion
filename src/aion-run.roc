@@ -16,12 +16,13 @@ usage = Str.join_with(
 		"  aion-run shell",
 		"  aion-run status",
 		"  aion-run resources",
+		"  aion-run build-image",
 		"  aion-run import-image",
 		"  aion-run image-status",
 		"  aion-run image-reconcile",
 		"  aion-run create-demo",
 		"  aion-run create-project <name> <project> <machine>",
-		"  aion-run deploy-project <name> <project> <artifact>",
+		"  aion-run deploy-project <name> <project> <machine>",
 		"  aion-run shell-demo",
 		"  aion-run shell-pi-demo",
 		"  aion-run check-demo",
@@ -80,6 +81,19 @@ optional_value = |entries, name|
 		_ => Err(DuplicateDotEnvValue(name))
 	}
 
+value_or = |entries, name, fallback|
+	match entries.keep_if(|entry| entry.name == name) {
+		[{ value, .. }] => Ok(value)
+		[] => Ok(fallback)
+		_ => Err(DuplicateDotEnvValue(name))
+	}
+
+provider_environment = |entries|
+	Ok([
+		("AION_REGION", value_or(entries, "AION_REGION", "nyc3")?),
+		("AION_SIZE", value_or(entries, "AION_SIZE", "s-2vcpu-4gb")?),
+	])
+
 unset_args = |names|
 	match names {
 		[] => []
@@ -111,42 +125,58 @@ shell! = |entries| {
 	root = Path.display(Env.cwd!()?)
 	path = Env.var_str!(OsStr.utf8("PATH"))?
 	shell = login_shell!() ?? "bash"
-	environment = entries.map(|entry| (entry.name, entry.value)).append(("PATH", "${root}/.kai/artifacts:${path}"))
+	environment = entries.map(|entry| (entry.name, entry.value)).append(("PATH", "${root}/.kai/artifacts/builds:${path}"))
 	run!(shell, [], environment, ["PS1", "PROMPT", "RPROMPT"])
 }
 
+build_image! = ||
+	run!(
+		".kai/artifacts/builds/aion",
+		["images", "build", "base"],
+		[],
+		[
+			"AION_MODEL_API_KEY",
+			"AWS_ACCESS_KEY_ID",
+			"AWS_SECRET_ACCESS_KEY",
+			"AWS_SESSION_TOKEN",
+			"DIGITALOCEAN_TOKEN",
+			"EVERPAID_API_KEY",
+		],
+	)
+
 import_image! = |entries|
 	run!(
-		".kai/artifacts/aion",
-		["image", "import-local", ".kai/artifacts/images/agent/result/agent.qcow2"],
-		[
+		".kai/artifacts/builds/aion",
+		["image", "import-local", ".kai/artifacts/images/base/result/base.qcow2.gz"],
+		provider_environment(entries)?.concat([
 			("AWS_ACCESS_KEY_ID", require_value(entries, "AWS_ACCESS_KEY_ID")?),
 			("AWS_SECRET_ACCESS_KEY", require_value(entries, "AWS_SECRET_ACCESS_KEY")?),
 			("DIGITALOCEAN_SPACE_NAME", require_value(entries, "DIGITALOCEAN_SPACE_NAME")?),
 			("DIGITALOCEAN_SPACE_REGION", require_value(entries, "DIGITALOCEAN_SPACE_REGION")?),
 			("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?),
-		],
+		]),
 		["AWS_SESSION_TOKEN", "AION_MODEL_API_KEY", "EVERPAID_API_KEY"],
 	)
 
 create_project! = |entries, name, project, machine|
 	run!(
-		".kai/artifacts/aion",
+		".kai/artifacts/builds/aion",
 		["create", name, "--project", project, "--machine", machine],
+		provider_environment(entries)?.append(("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?)),
 		[
-			("AION_MODEL_API_KEY", require_value(entries, "AION_MODEL_API_KEY")?),
-			("AWS_ACCESS_KEY_ID", require_value(entries, "AWS_ACCESS_KEY_ID")?),
-			("AWS_SECRET_ACCESS_KEY", require_value(entries, "AWS_SECRET_ACCESS_KEY")?),
-			("DIGITALOCEAN_SPACE_NAME", require_value(entries, "DIGITALOCEAN_SPACE_NAME")?),
-			("DIGITALOCEAN_SPACE_REGION", require_value(entries, "DIGITALOCEAN_SPACE_REGION")?),
-			("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?),
+			"AION_MODEL_API_KEY",
+			"AWS_ACCESS_KEY_ID",
+			"AWS_SECRET_ACCESS_KEY",
+			"AWS_SESSION_TOKEN",
+			"DIGITALOCEAN_SPACE_NAME",
+			"DIGITALOCEAN_SPACE_REGION",
+			"EVERPAID_API_KEY",
 		],
-		["AWS_SESSION_TOKEN", "EVERPAID_API_KEY"],
 	)
 
 status! = ||
 	run!(
-		".kai/artifacts/aion",
+		".kai/artifacts/builds/aion",
 		["status"],
 		[],
 		[
@@ -161,7 +191,7 @@ status! = ||
 
 image_visibility! = |entries, arguments|
 	run!(
-		".kai/artifacts/aion",
+		".kai/artifacts/builds/aion",
 		arguments,
 		[("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?)],
 		[
@@ -174,16 +204,18 @@ image_visibility! = |entries, arguments|
 	)
 
 digitalocean_operation! = |entries, arguments, include_model_key| {
-	environment = if include_model_key {
-		[
-			("AION_MODEL_API_KEY", require_value(entries, "AION_MODEL_API_KEY")?),
-			("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?),
-		]
-	} else {
-		[("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?)]
-	}
+	environment = provider_environment(entries)?.concat(
+		if include_model_key {
+			[
+				("AION_MODEL_API_KEY", require_value(entries, "AION_MODEL_API_KEY")?),
+				("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?),
+			]
+		} else {
+			[("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?)]
+		},
+	)
 	run!(
-		".kai/artifacts/aion",
+		".kai/artifacts/builds/aion",
 		arguments,
 		environment,
 		[
@@ -197,10 +229,10 @@ digitalocean_operation! = |entries, arguments, include_model_key| {
 	)
 }
 
-deploy_project! = |name, project, artifact|
+deploy_project! = |name, project, machine|
 	run!(
-		".kai/artifacts/aion",
-		["deploy", name, artifact, "--project", project],
+		".kai/artifacts/builds/aion",
+		["deploy", name, machine, "--project", project],
 		[],
 		[
 			"AION_MODEL_API_KEY",
@@ -214,7 +246,7 @@ deploy_project! = |name, project, artifact|
 
 shell_demo! = |run_pi|
 	run!(
-		".kai/artifacts/aion",
+		".kai/artifacts/builds/aion",
 		if run_pi ["demo", "shell", "pi"] else ["demo", "shell"],
 		[],
 		[
@@ -229,13 +261,13 @@ shell_demo! = |run_pi|
 
 payment_server! = |entries|
 	run!(
-		".kai/artifacts/aion-web",
+		".kai/artifacts/builds/aion-web",
 		[],
-		[
+		provider_environment(entries)?.concat([
 			("AION_MODEL_API_KEY", optional_value(entries, "AION_MODEL_API_KEY")?),
 			("DIGITALOCEAN_TOKEN", require_value(entries, "DIGITALOCEAN_TOKEN")?),
 			("EVERPAID_API_KEY", require_value(entries, "EVERPAID_API_KEY")?),
-		],
+		]),
 		[
 			"AWS_ACCESS_KEY_ID",
 			"AWS_SECRET_ACCESS_KEY",
@@ -250,12 +282,13 @@ main! = |args|
 		["shell"] => shell!(load_dotenv!()?)
 		["status"] => status!()
 		["resources"] => image_visibility!(load_dotenv!()?, ["resources"])
+		["build-image"] => build_image!()
 		["import-image"] => import_image!(load_dotenv!()?)
 		["image-status"] => image_visibility!(load_dotenv!()?, ["image", "status"])
 		["image-reconcile"] => image_visibility!(load_dotenv!()?, ["image", "reconcile"])
 		["create-demo"] => digitalocean_operation!(load_dotenv!()?, ["create", "demo"], Bool.True)
 		["create-project", name, project, machine] => create_project!(load_dotenv!()?, name, project, machine)
-		["deploy-project", name, project, artifact] => deploy_project!(name, project, artifact)
+		["deploy-project", name, project, machine] => deploy_project!(name, project, machine)
 		["shell-demo"] => shell_demo!(Bool.False)
 		["shell-pi-demo"] => shell_demo!(Bool.True)
 		["check-demo"] => image_visibility!(load_dotenv!()?, ["demo", "check"])

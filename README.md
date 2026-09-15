@@ -5,7 +5,7 @@ Ad-hoc NixOS agent machines on DigitalOcean, defined in a `Kaifile` and operated
 ## Operator setup
 
 1. Create a custom-scoped DigitalOcean API token. The exact scope union required by this CLI is `actions:read`, `droplet:create`, `droplet:delete`, `droplet:read`, `image:create`, `image:delete`, `image:read`, `regions:read`, `sizes:read`, `snapshot:read`, `ssh_key:create`, `ssh_key:read`, `tag:create`, `tag:read`, and `vpc:read`. This includes DigitalOcean's dependency scopes for create/delete, plus `tag:create` for each unique operation tag and `tag:read` for filtered reconciliation. See [Scopes for API Tokens](https://docs.digitalocean.com/reference/api/scopes/), [`droplet:create`](https://docs.digitalocean.com/reference/api/scopes/droplet/create), [`image:create`](https://docs.digitalocean.com/reference/api/scopes/image/create), and [`tag:create`](https://docs.digitalocean.com/reference/api/scopes/tag/create).
-2. Create one private, Standard DigitalOcean Space in `nyc3`, with versioning disabled and no public bucket policy or listing.
+2. Create one private, Standard DigitalOcean Space in the same region as `AION_REGION` (default `nyc3`), with versioning disabled and no public bucket policy or listing.
 3. Create a limited Spaces key with Read/Write/Delete access only to that Space. This is separate from the API token.
 4. With separate bucket-administrator credentials, configure an enabled lifecycle rule that expires the `aion-imports/` prefix after one day and aborts incomplete multipart uploads after one day. Verify the rule with DigitalOcean's [lifecycle instructions](https://docs.digitalocean.com/products/spaces/how-to/configure-lifecycle-rules/). The rule is a fallback for interrupted or uncertain cleanup, not the normal deletion path.
 5. Bootstrap the project Kai binary from the latest Kai `master`, then use only Kai commands for operator workflows. Tasks enter their declared runtime environments and a Roc launcher reads the ignored `.env` file:
@@ -15,7 +15,7 @@ nix run github:thebrandonlucas/kai/master -- -f Kaifile.bootstrap run bootstrap-
 ./kai workflow prepare
 ```
 
-The project plugin adds only Aion's Roc package build and NixOS service configuration. Kai's standard `image` command composes that service into the machine and produces `.kai/artifacts/images/agent/result/agent.qcow2`.
+The project plugin adds only Aion's Roc package build support. Aion composes its DigitalOcean configuration around an ordinary Kai machine and produces the reusable base image at `.kai/artifacts/images/base/result/base.qcow2.gz`. DigitalOcean configuration is not part of Kai or the user's Kaifile.
 
 To enter a dependency-complete shell with the latest Aion CLI built from the working tree and `.env` loaded, run:
 
@@ -29,14 +29,14 @@ The interactive shell receives every value in `.env`; exit it when finished.
 Visibility commands separate offline state, provider inventory, and machine health:
 
 ```sh
-./kai run status       # local state only; does not read .env or use the network
+./kai run status       # saved local state; does not read .env or use the network
 ./kai run resources    # Aion-tagged DigitalOcean resources and local tracking labels
 ./kai run check-demo   # provider identity, IP agreement, and one bounded SSH probe
 ```
 
 `aion image status` is provider-backed but read-only. If a pending import later becomes available, `aion image reconcile` verifies its operation tags before recovering local image state. None of the visibility commands adopt, delete, or otherwise change resources.
 
-`workflow prepare` is the non-billable preparation command. It builds the CLI, environment launcher, initializer, and agent image; it does not contact DigitalOcean, Spaces, Everpaid, or model APIs.
+`workflow prepare` is the non-billable preparation command. It builds the CLI, environment launcher, and reusable base image; it does not contact DigitalOcean, Spaces, Everpaid, or model APIs.
 
 ## Test the full pipeline
 
@@ -62,7 +62,7 @@ nix run github:thebrandonlucas/kai/master -- -f Kaifile.bootstrap run bootstrap-
 
 The commands prompt before importing an image, creating a Droplet, or deleting an image. The older `image import <https-url>` flow remains available for an operator-hosted URL.
 
-`create` registers `~/.ssh/id_ed25519.pub`, boots the fixed `s-2vcpu-4gb` size in fixed region `nyc3`, then provisions the model key and user-owned Pi configuration over SSH. Model choices are runtime state, not part of the shared image. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
+Operator-owned creates register `~/.ssh/id_ed25519.pub`, boot `AION_SIZE` (default `s-2vcpu-4gb`) in `AION_REGION` (default `nyc3`), and activate the selected project machine with its local `kai`. The default agent create then transfers its model key and Pi configuration under `/root`. A create with `--ssh-public-key-file`, including a paid customer order, installs only that customer key: it does not install the operator key, activate a project, or provision a model. Model choices are runtime state, not part of the shared image. Check current DigitalOcean Droplet, custom-image, and Spaces pricing before operating.
 
 ## Product catalog
 
@@ -80,10 +80,14 @@ An ordinary Kai project can also be created or deployed directly:
 
 ```sh
 aion create <machine-name> --project <directory> --machine <kai-machine>
-aion deploy <machine-name> <artifact> --project <directory>
+aion deploy <saved-machine> <kai-machine> --project <directory>
 ```
 
-If creation was interrupted after DigitalOcean accepted the Droplet, a later create prints its ID, status, public IP, and exact recovery command. `aion recover <name> <droplet-id>` validates the provider name, active state, Aion operation tag, operator SSH key, and SSH access before restoring local machine state. Use `aion resources` for the complete provider inventory.
+Both commands require an ordinary `<directory>/Kaifile`. Aion uses its operator `./kai`, a project-local `kai` fallback, or `AION_KAI` when explicitly set. Create always reuses `.aion/image.json`; it does not build or import a project image. Before the billable create, Aion builds the selected machine, extends it with Aion-owned DigitalOcean runtime configuration, and pins the exact closure for recovery. After the Droplet boots, Aion copies that closure, records it as the remote system generation, and activates it over SSH. Redeployment repeats the same composition without rebuilding or importing the base image.
+
+Secret-bearing machines are rejected before billing for now. Canonical Kai SOPS files are encrypted to a machine's unique SSH host key, which does not exist until its Droplet has booted. Supporting them safely requires a separate post-boot recipient-enrollment and redeployment flow; the reusable base image never contains a shared host private key.
+
+If creation was interrupted after DigitalOcean accepted the Droplet, a later create prints its ID, status, public IP, and exact recovery command. `aion recover <name> <droplet-id>` validates provider identity and any recorded operation metadata before restoring local machine state. It completes recorded project activation only when pending metadata and operator SSH access exist. Legacy pending creates without project metadata only verify operator SSH when available; customer-key creates are recovered without an operator SSH attempt. Use `aion resources` for the complete provider inventory.
 
 ## Test Everpaid checkout
 
@@ -107,11 +111,11 @@ Everpaid order state and the global reservation are retained under `.aion/paymen
 - URL image import requires typing `import image`; local import requires `import local image`; create requires `create <name>`. Neither billable POST runs on other input. Image deletion requires typing `delete image <id>`. Image and Droplet deletion remove local state only when DigitalOcean returns `204`. A `404` is not confirmation because it may indicate a token for the wrong account; local state is retained.
 - Each billable image-import or Droplet-create operation sends at most one POST. Aion does not send or assume an undocumented general idempotency header. Before that POST it persists and prints a unique `aion-image-*` or `aion-droplet-*` operation tag; successful resource state retains the same tag. Post-POST diagnostics are best-effort and state updates are attempted before output, so a closed output stream cannot skip reconciliation, persistence, or cleanup.
 - Only a `4xx` create/import response is a definitive rejection. A transport failure, `5xx` or other unexpected response, or accepted-response decode failure is uncertain and reconciled at most six times. Images use `GET /v2/images?tag_name=<operation-tag>&private=true&per_page=200`; Droplets use `GET /v2/droplets?tag_name=<operation-tag>&per_page=200`. The POST is never repeated. Any reconciled Droplet IDs are recorded, printed best-effort, and automatically deleted; failed reconciliation or deletion retains the operation tag, known IDs, and recovery instructions in the pending directory.
-- Before enrolling an SSH key or creating a Droplet, `create` queries `GET /v2/droplets?tag_name=aion&per_page=200` and refuses if any tagged Aion Droplet exists. This enforces the MVP maximum of one remote Aion VM after local state loss. `.aion/create.pending/` is also one atomic global local create guard, not a per-name guard.
+- Before enrolling an SSH key or creating a Droplet, `create` queries `GET /v2/droplets?tag_name=aion&per_page=200` and refuses only if a same-name tagged Droplet exists. Sequential creates may retain multiple machines; `.aion/create.pending/` remains one atomic global local create guard.
 - Image readiness is polled at most 60 times and Droplet activation 40 times; API requests time out after 30 seconds. If an import outlasts the polling window, `run image-reconcile` verifies the pending operation tag and promotes a subsequently available image into local state while retaining source-object recovery details for lifecycle cleanup. SSH readiness has 30 attempts capped at 20 seconds each, and each enrollment command is capped at 30 seconds.
 - Local import uploads a uniquely named `aion-imports/` object with `public-read` ACL into the otherwise private Space. An uncertain upload is retained. After the image POST, the object is deleted immediately only for a definitive `4xx` rejection; unresolved/uncertain outcomes retain it. An accepted object is deleted normally only after image availability is confirmed. `.aion/image.pending/` retains non-secret operation status, the operation tag, Space/key details, and any known image ID when recovery is needed. `image delete` falls back to a pending image ID only when `.aion/image.json` is absent; a corrupt saved image file stops deletion. Pending state remains after image deletion for source-object recovery. Inspect the recorded resources, let the lifecycle rule clean a stale object if needed, and remove the guard only after both providers are resolved.
-- Any activation, SSH, key-enrollment, provisioning-state write, or machine-state save failure before create completes triggers one best-effort DELETE. If deletion is not confirmed, the error prints the Droplet ID and operation tag and retains the global guard for manual cleanup.
+- Operator-owned creates record the absolute project path, Kai machine, and exact GC-rooted closure under `.aion/create.pending/` before the Droplet POST. Recovery activates that closure rather than rebuilding changed project sources. Customer-key creates deliberately record no activation target. Any required whole-machine activation, SSH, key-enrollment, provisioning-state write, or machine-state save failure before create completes triggers one best-effort DELETE. If deletion is not confirmed, the error prints the Droplet ID and operation tag and retains the global guard for recovery.
 - Machine names are validated as 1-63-character lowercase ASCII DNS labels before create, shell, or destroy uses them. `destroy` retains local state and prints the Droplet ID and operation tag when deletion is not confirmed. Imported images and `aion-<name>` SSH keys remain after successful destroy and are reported for cleanup.
-- Use only a public HTTPS image URL with no embedded credentials. The ignored `.env` uses one `KEY=value` entry per line. The Roc task launcher passes only each operation's required DigitalOcean, model, Everpaid, or Spaces credentials and removes unrelated inherited credentials, including `AWS_SESSION_TOKEN`. Values are never command arguments, logs, `.aion/` state, images, or API payloads. Agent configuration and model-key transfer use a private OS temporary directory, install mode-`0600` user files, and delete local staging best-effort.
+- Use only a public HTTPS image URL with no embedded credentials. The ignored `.env` uses one `KEY=value` entry per line. The Roc task launcher passes only each operation's required DigitalOcean, model, Everpaid, or Spaces credentials and removes unrelated inherited credentials, including `AWS_SESSION_TOKEN`. Values are never command arguments, logs, `.aion/` state, images, or API payloads. Default-agent configuration and model-key transfer use a private OS temporary directory, install mode-`0600` user files, and delete local staging best-effort.
 
-Non-secret state lives under `.aion/`.
+Historical image and machine state remains inspectable and deletable with its original `nyc3`, `s-2vcpu-4gb`, and `aion` SSH defaults. Historical images are not used for new root-based creates; delete that image state and import the current reusable image first. Non-secret state lives under `.aion/`.

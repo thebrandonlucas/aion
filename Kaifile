@@ -9,11 +9,11 @@ environment roc {
 
 task format {
   environment: "roc"
-  run: ["roc", "fmt", "plugins/aion/AionPlugin.roc", "src/aion-init.roc", "src/aion-run.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/Ansi.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "src/Everpaid.roc", "src/EverpaidApi.roc", "src/SshKey.roc"]
+  run: ["roc", "fmt", "src/aion-run.roc", "src/aion-web.roc", "src/aion.roc", "src/AionState.roc", "src/Ansi.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "src/Everpaid.roc", "src/EverpaidApi.roc", "src/SshKey.roc"]
 }
 
 environment cli {
-  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "bashInteractive", "openssh", "coreutils", "awscli2"]
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "bashInteractive", "openssh", "coreutils", "awscli2", "nix", "nixos-rebuild"]
   overlays: ["github:thebrandonlucas/roc-overlay"]
 }
 
@@ -29,14 +29,8 @@ build aion-run {
   output: "aion-run"
 }
 
-build aion-init {
-  environment: roc
-  run: ["roc", "build", "src/aion-init.roc", "--opt=size", "--output=aion-init"]
-  output: "aion-init"
-}
-
 environment web {
-  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "openssh", "coreutils", "awscli2"]
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools", "openssh", "coreutils", "awscli2", "nix", "nixos-rebuild"]
   overlays: ["github:thebrandonlucas/roc-overlay"]
 }
 
@@ -50,6 +44,11 @@ build aion-web {
 task aion-shell {
   environment: "cli"
   run: [".kai/artifacts/builds/aion-run", "shell"]
+}
+
+task build-image {
+  environment: "cli"
+  run: [".kai/artifacts/builds/aion-run", "build-image"]
 }
 
 task import-image {
@@ -117,21 +116,22 @@ task payment-server {
   run: [".kai/artifacts/builds/aion-run", "payment-server"]
 }
 
-environment agent {
-  packages: ["git", "pi-coding-agent"]
+environment base {
+  packages: []
 }
 
-service aion {
-  artifact: "aion-init"
-  secrets: []
-  restart: on-failure
+machine base {
+  environment: base
+  system: "x86_64-linux"
+}
+
+environment agent {
+  packages: ["git", "pi-coding-agent"]
 }
 
 machine agent {
   environment: agent
   system: "x86_64-linux"
-  users: ["aion"]
-  services: ["aion"]
 }
 
 workflow aion-shell {
@@ -139,11 +139,11 @@ workflow aion-shell {
 }
 
 workflow prepare {
-  steps: ["build aion", "build aion-run", "image agent"]
+  steps: ["build aion", "build aion-run", "run build-image"]
 }
 
 workflow import-image {
-  steps: ["build aion", "build aion-run", "image agent", "run import-image", "run image-status"]
+  steps: ["build aion", "build aion-run", "run build-image", "run import-image", "run image-status"]
 }
 
 workflow payment-demo {

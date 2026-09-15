@@ -1,25 +1,12 @@
 {
   "nodes": {
-    "kai-source-bitcoin-qr": {
-      "flake": false,
-      "locked": {
-        "lastModified": 499162500,
-        "narHash": "sha256-a9xwheteMpB0pb2jy/YD1Qad40RENF0BYDI+MWDpauU=",
-        "type": "tarball",
-        "url": "https://registry.npmjs.org/bitcoin-qr/-/bitcoin-qr-1.4.1.tgz"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://registry.npmjs.org/bitcoin-qr/-/bitcoin-qr-1.4.1.tgz"
-      }
-    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1787498568,
-        "narHash": "sha256-9i/VTdusq/+NM/tz+J1Re+ojkMB8MBf0QshnYfzHz30=",
+        "lastModified": 1789286504,
+        "narHash": "sha256-eiEK7cKZORNEvX0GeF3RtNEF/JXhgf2RqSp3230q13E=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "56c02bc00adcf003215cc4bd996d6efaf4cff188",
+        "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
         "type": "github"
       },
       "original": {
@@ -67,11 +54,11 @@
         "nixpkgs-darwin": "nixpkgs-darwin"
       },
       "locked": {
-        "lastModified": 1788452746,
-        "narHash": "sha256-449ME686obQkRi0ujOad51uov6UxdT3RGXJspMuWq1Y=",
+        "lastModified": 1789227108,
+        "narHash": "sha256-RIrpw7baM6SWw475Y0hD8PstV9/D0oVOvGvA61AtWCk=",
         "owner": "thebrandonlucas",
         "repo": "roc-overlay",
-        "rev": "fad55022e28c365f0ab9e5d12de840f2f1c041fb",
+        "rev": "3020fdfe5eb939ccaebca9e966104784a737bec6",
         "type": "github"
       },
       "original": {
@@ -82,7 +69,6 @@
     },
     "root": {
       "inputs": {
-        "kai-source-bitcoin-qr": "kai-source-bitcoin-qr",
         "nixpkgs": "nixpkgs",
         "overlay0": "overlay0"
       }

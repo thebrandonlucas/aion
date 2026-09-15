@@ -1,8 +1,27 @@
 # Feature: machine images need extensible target profiles
 
-## Limitation on Kai master (`a7373bd`)
+## Limitation on canonical SOPS Kai (`b6b1178`)
 
 The standard `image` command always renders one generic QEMU QCOW2 configuration. A cloud image may require a supported NixOS guest module, boot mode, metadata agent, disk settings, networking behavior, or output variant. Kaifile cannot select those requirements.
+
+Aion reproduced the missing boundary against the canonical SOPS branch with:
+
+```kai
+machine agent {
+  environment: agent
+  system: "x86_64-linux"
+  profile: digital-ocean
+}
+```
+
+`kai machine agent` rejects this before planning:
+
+```text
+error: unknown field 'profile'
+  --> Kaifile:121:3
+```
+
+Without a target profile, standard Kai cannot produce the DigitalOcean image or ensure that DigitalOcean metadata SSH configuration survives later machine activation.
 
 ## Needed capability
 

@@ -1,0 +1,9 @@
+   environment homelab {
+     packages: ["cowsay"]
+   }
+
+   machine homelab {
+     environment: homelab
+     system: "x86_64-linux"
+     services: ["openssh"]
+   }

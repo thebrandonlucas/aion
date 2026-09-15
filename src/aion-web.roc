@@ -13,6 +13,7 @@ import pf.UnixTime
 import http.Response
 import "aion.html" as page : List(U8)
 
+import AionState
 import Everpaid
 import SshKey
 
@@ -22,6 +23,8 @@ Context : {
 	home : Str,
 	model_api_key : Str,
 	path : Str,
+	region : Str,
+	size : Str,
 }
 
 Order : {
@@ -56,6 +59,8 @@ require_env! = |name| {
 
 optional_env! = |name| Env.var_str!(OsStr.utf8(name)) ?? ""
 
+env_or_default! = |name, fallback| Env.var_str!(OsStr.utf8(name)) ?? fallback
+
 init! : () => Try({ config : Server.Config, context : Context }, _)
 init! = || {
 	api_key = require_env!("EVERPAID_API_KEY")?
@@ -63,8 +68,10 @@ init! = || {
 	home = require_env!("HOME")?
 	model_api_key = optional_env!("AION_MODEL_API_KEY")
 	path = require_env!("PATH")?
+	region = env_or_default!("AION_REGION", "nyc3")
+	size = env_or_default!("AION_SIZE", "s-2vcpu-4gb")
 	Path.create_all!(orders_root)?
-	Ok({ config: Server.default_config, context: { api_key, digitalocean_token, home, model_api_key, path } })
+	Ok({ config: Server.default_config, context: { api_key, digitalocean_token, home, model_api_key, path, region, size } })
 }
 
 response = |status, content_type, body|
@@ -86,9 +93,9 @@ machine_json = |status, message| json(200, "{\"status\":\"${status}\",\"message\
 
 active_machine_json! = |name| {
 	_ = read_order!(name)?
-	machine : { ip : Str }
-	machine = Json.parse(Path.read_utf8!(Path.utf8(".aion/machines/${name}.json"))?)?
-	Ok(json(200, Json.to_str({ status: "active", message: "Machine is active", ip: machine.ip, sshCommand: "ssh aion@${machine.ip}", zedCommand: "zed ssh://aion@${machine.ip}:/home/aion" })))
+	machine = AionState.read_machine!(name)?
+	home = if machine.ssh_user == "root" "/root" else "/home/${machine.ssh_user}"
+	Ok(json(200, Json.to_str({ status: "active", message: "Machine is active", ip: machine.ip, sshCommand: "ssh ${machine.ssh_user}@${machine.ip}", zedCommand: "zed ssh://${machine.ssh_user}@${machine.ip}:${home}" })))
 }
 
 order_path = |name| Path.join(orders_root, "${name}.json")
@@ -158,11 +165,13 @@ invoice_json = |invoice|
 	)
 
 aion_command = |context, arguments, timeout_ms|
-	Cmd.new_str(".kai/artifacts/aion")
+	Cmd.new_str(".kai/artifacts/builds/aion")
 		.args_str(arguments)
 		.clear_envs()
 		.envs_str([
 			{ name: "AION_MODEL_API_KEY", value: context.model_api_key },
+			{ name: "AION_REGION", value: context.region },
+			{ name: "AION_SIZE", value: context.size },
 			{ name: "DIGITALOCEAN_TOKEN", value: context.digitalocean_token },
 			{ name: "EVERPAID_API_KEY", value: context.api_key },
 			{ name: "HOME", value: context.home },

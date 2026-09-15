@@ -1,0 +1,15 @@
+   environment development {
+     packages: [
+       "bashInteractive",
+       "curl",
+       "fd",
+       "git",
+       "ripgrep"
+     ]
+   }
+
+   machine zed {
+     environment: development
+     system: "x86_64-linux"
+     services: ["openssh"]
+   }

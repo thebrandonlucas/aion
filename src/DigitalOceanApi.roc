@@ -68,8 +68,8 @@ DigitalOceanApi := [].{
 	# Billable POSTs are deliberately single-attempt. Only 4xx responses are
 	# definitive rejections; transport failures, other statuses, and accepted-
 	# response decode failures are uncertain.
-	import_image_once! = |url, operation_tag, token| {
-		match Http.send_json!(request(POST, "/v2/images", token), DigitalOcean.image_import_body(url, operation_tag)) {
+	import_image_once! = |url, operation_tag, region, token| {
+		match Http.send_json!(request(POST, "/v2/images", token), DigitalOcean.image_import_body(url, operation_tag, region)) {
 			Err(error) => PostUncertain(error)
 			Ok(response) => {
 				status = Response.status(response)
@@ -173,8 +173,8 @@ DigitalOceanApi := [].{
 		}
 	}
 
-	create_droplet_once! = |name, image_id, ssh_key_id, operation_tag, token| {
-		body = DigitalOcean.droplet_create_body(name, image_id, ssh_key_id, operation_tag)
+	create_droplet_once! = |name, image_id, ssh_key_ids, operation_tag, region, size, token| {
+		body = DigitalOcean.droplet_create_body(name, image_id, ssh_key_ids, operation_tag, region, size)
 		match Http.send_json!(request(POST, "/v2/droplets", token), body) {
 			Err(error) => PostUncertain(error)
 			Ok(response) => {

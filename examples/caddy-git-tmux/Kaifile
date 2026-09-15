@@ -1,0 +1,26 @@
+environment web-build {
+  packages: ["rocpkgs.nightly", "llvmPackages.bintools"]
+  overlays: ["github:thebrandonlucas/roc-overlay"]
+}
+
+build homelab-web {
+  environment: web-build
+  run: ["roc", "build", "src/server.roc", "--opt=size", "--output=homelab-web"]
+  output: "homelab-web"
+}
+
+environment homelab {
+  packages: ["caddy", "curl", "git", "tmux"]
+}
+
+service web {
+  artifact: "homelab-web"
+  secrets: []
+  restart: on-failure
+}
+
+machine homelab {
+  environment: homelab
+  system: "x86_64-linux"
+  services: ["openssh", "web"]
+}

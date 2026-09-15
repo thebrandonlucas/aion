@@ -35,7 +35,7 @@ usage = Str.join_with(
 		"  images      Manage the shared machine image",
 		"  products    List machine products",
 		"  create      Create or recover a machine",
-		"  deploy      Deploy an artifact to a machine",
+		"  deploy      Activate a Kai machine on a saved machine",
 		"",
 		"Run 'aion help <command>' for details.",
 	],
@@ -49,10 +49,10 @@ help = |topic|
 		"resources" => "Usage: aion resources\n\nList Aion-tagged DigitalOcean images, Droplets, and SSH keys with local tracking and billing labels."
 		"machines" => "Usage: aion machines\n\nList machines recorded in local Aion state. Use 'aion machine <name> status' to check one against DigitalOcean and SSH."
 		"machine" => "Usage: aion machine <name> <command>\n\nCommands:\n  status       Compare local and provider state and probe SSH\n  shell [pi]   Connect over SSH, optionally starting Pi\n  destroy      Delete the Droplet and local machine state"
-		"images" => "Usage: aion images <command>\n\nCommands:\n  status                 Show provider import status\n  import <https-url>     Import an HTTPS image\n  import-local <path>    Upload and import a local .qcow2 image\n  reconcile              Recover an available pending import\n  delete                 Delete the imported image"
+		"images" => "Usage: aion images <command>\n\nCommands:\n  build <machine>        Build the reusable DigitalOcean base image\n  status                 Show provider import status\n  import <https-url>     Import an HTTPS image\n  import-local <path>    Upload and import a local .qcow2 or .qcow2.gz image\n  reconcile              Recover an available pending import\n  delete                 Delete the imported image"
 		"products" => "Usage: aion products\n\nList available machine products and prices."
 		"create" => "Usage:\n  aion create <name>\n  aion create <name> --ssh-public-key-file <path>\n  aion create <name> <product>\n  aion create <name> --project <directory> --machine <machine>\n  aion recover <name> <droplet-id>"
-		"deploy" => "Usage: aion deploy <machine> <artifact> [--project <directory>]"
+		"deploy" => "Usage: aion deploy <saved-machine> <kai-machine> [--project <directory>]"
 		_ => usage
 	}
 
@@ -84,6 +84,21 @@ valid_name = |name| {
 			and is_name_alphanumeric(bytes.get(0) ?? 0)
 				and is_name_alphanumeric(bytes.get(length - 1) ?? 0)
 					and List.all(bytes, |byte| is_name_alphanumeric(byte) or byte == '-')
+}
+
+provider_value! = |name, fallback| {
+	value = Env.var_str!(OsStr.utf8(name)) ?? fallback
+	if valid_name(value) {
+		Ok(value)
+	} else {
+		Err(InvalidProviderSlug("${name} must be a 1-63 character lowercase ASCII slug"))
+	}
+}
+
+provider_config! = || {
+	region = provider_value!("AION_REGION", "nyc3")?
+	size = provider_value!("AION_SIZE", "s-2vcpu-4gb")?
+	Ok({ region, size })
 }
 
 is_artifact_byte = |byte|
@@ -172,8 +187,8 @@ reconcile_images! = |auth, operation_tag, attempts_left| {
 	}
 }
 
-resolve_image_post! = |url, auth, operation_tag, status_for| {
-	match DigitalOceanApi.import_image_once!(url, operation_tag, auth) {
+resolve_image_post! = |url, auth, operation_tag, region, status_for| {
+	match DigitalOceanApi.import_image_once!(url, operation_tag, region, auth) {
 		PostAccepted(image) => Ok(ImagePostAccepted(image))
 		PostRejected(error) => {
 			AionState.record_import_status!(status_for("Image import POST was definitively rejected")) ?? {}
@@ -247,13 +262,14 @@ image_import! = |url| {
 	} else if !url.starts_with("https://") {
 		Err(ImageUrlMustUseHttps)
 	} else {
-		confirm_operation!("This imports a custom image into nyc3 and may incur image-storage charges.", "import image")?
+		config = provider_config!()?
+		confirm_operation!("This imports a custom image into ${config.region} and may incur image-storage charges.", "import image")?
 		auth = token!()?
 		operation_tag = operation_tag!("image")?
 		status_for = |stage| operation_status(operation_tag, stage)
-		AionState.begin_image_import!(operation_tag, status_for("URL import POST not yet completed"))?
+		AionState.begin_image_import!(operation_tag, config.region, status_for("URL import POST not yet completed"))?
 		Stdout.line!("image import operation tag ${operation_tag}; pending state is under .aion/image.pending/")?
-		outcome = resolve_image_post!(url, auth, operation_tag, status_for)?
+		outcome = resolve_image_post!(url, auth, operation_tag, config.region, status_for)?
 		image = match outcome {
 			ImagePostAccepted(found) => found
 			ImagePostRejected(error) => return Err(error)
@@ -262,7 +278,7 @@ image_import! = |url| {
 		AionState.record_imported!(image.id, status_for("Image ID ${U64.to_str(image.id)}; polling import"))?
 		_ = Stdout.line!("image import accepted (id ${U64.to_str(image.id)}); polling at most 60 times") ?? {}
 		ready = poll_image!(auth, image.id, 60)?
-		AionState.save_image!({ id: ready.id, name: ready.name, operation_tag })?
+		AionState.save_image!({ id: ready.id, name: ready.name, operation_tag, region: config.region, ssh_user: "root" })?
 		AionState.clear_image_import!()?
 		_ = Stdout.line!("image '${ready.name}' available (id ${U64.to_str(ready.id)})") ?? {}
 		Ok({})
@@ -272,13 +288,13 @@ image_import! = |url| {
 valid_space_name = |name|
 	valid_name(name) and !name.starts_with("-") and !name.ends_with("-")
 
-spaces_config! = || {
+spaces_config! = |image_region| {
 	space = require_nonempty_env!("DIGITALOCEAN_SPACE_NAME", "export the private Space name")?
-	region = require_nonempty_env!("DIGITALOCEAN_SPACE_REGION", "export nyc3")?
+	region = require_nonempty_env!("DIGITALOCEAN_SPACE_REGION", "export the Space region")?
 	_ = require_nonempty_env!("AWS_ACCESS_KEY_ID", "export a Space-scoped access key")?
 	_ = require_nonempty_env!("AWS_SECRET_ACCESS_KEY", "export its secret")?
-	if region != "nyc3" {
-		Err(UnsupportedSpaceRegion("only nyc3 is compatible with this Aion image"))
+	if region != image_region {
+		Err(UnsupportedSpaceRegion("DIGITALOCEAN_SPACE_REGION must equal AION_REGION (${image_region})"))
 	} else if !valid_space_name(space) {
 		Err(InvalidSpaceName("use lowercase ASCII letters, digits, and internal '-' only"))
 	} else {
@@ -338,16 +354,18 @@ delete_space_object! = |config, key| {
 image_import_local! = |path| {
 	if AionState.has_image!()? {
 		Err(ImageAlreadyExists)
-	} else if !Path.is_file!(path)? or !Path.display(path).ends_with(".qcow2") {
-		Err(InvalidLocalImage("path must be a local .qcow2 file"))
+	} else if !Path.is_file!(path)? or (!Path.display(path).ends_with(".qcow2") and !Path.display(path).ends_with(".qcow2.gz")) {
+		Err(InvalidLocalImage("path must be a local .qcow2 or .qcow2.gz file"))
 	} else {
-		config = spaces_config!()?
+		provider = provider_config!()?
+		config = spaces_config!(provider.region)?
 		auth = token!()?
-		confirm_operation!("This uploads one temporary public-read object and imports one custom image into nyc3.", "import local image")?
-		key = "aion-imports/aion-agent-${U64.to_str(Random.seed_u64!()?)}-${U64.to_str(Random.seed_u64!()?)}.qcow2"
+		confirm_operation!("This uploads one temporary public-read object and imports one custom image into ${provider.region}.", "import local image")?
+		extension = if Path.display(path).ends_with(".gz") "qcow2.gz" else "qcow2"
+		key = "aion-imports/aion-agent-${U64.to_str(Random.seed_u64!()?)}-${U64.to_str(Random.seed_u64!()?)}.${extension}"
 		operation_tag = operation_tag!("image")?
 		status_for = |stage| operation_status(operation_tag, space_status(config, key, stage))
-		AionState.begin_image_import!(operation_tag, status_for("Upload not yet completed"))?
+		AionState.begin_image_import!(operation_tag, provider.region, status_for("Upload not yet completed"))?
 		Stdout.line!("image import operation tag ${operation_tag}; pending state is under .aion/image.pending/")?
 		match upload_space_object!(path, config, key) {
 			Err(error) => {
@@ -358,7 +376,7 @@ image_import_local! = |path| {
 		}
 		_ = AionState.record_import_status!(status_for("Public-read object uploaded; import POST not yet completed")) ?? {}
 		url = "https://${config.space}.${config.region}.digitaloceanspaces.com/${key}"
-		outcome = resolve_image_post!(url, auth, operation_tag, status_for)?
+		outcome = resolve_image_post!(url, auth, operation_tag, provider.region, status_for)?
 		image = match outcome {
 			ImagePostAccepted(found) => found
 			ImagePostUnresolved(error) => return Err(error)
@@ -387,7 +405,7 @@ image_import_local! = |path| {
 			}
 			Ok(ready) => {
 				_ = AionState.record_import_status!(status_for("Image ID ${id} available; saving image state and deleting source")) ?? {}
-				save = AionState.save_image!({ id: ready.id, name: ready.name, operation_tag })
+				save = AionState.save_image!({ id: ready.id, name: ready.name, operation_tag, region: provider.region, ssh_user: "root" })
 				delete = delete_space_object!(config, key)
 				match (save, delete) {
 					(Err(state_error), Err(_)) => {
@@ -515,8 +533,8 @@ wait_for_ssh! = |ip, attempts_left| {
 				"ConnectionAttempts=1",
 				"-o",
 				"StrictHostKeyChecking=accept-new",
-				"aion@${ip}",
-				"mkdir -p ~/.config/aion ~/.pi/agent && chmod 0700 ~/.config/aion ~/.pi ~/.pi/agent",
+				"root@${ip}",
+				"mkdir -p /root/.config/aion /root/.pi/agent && chmod 0700 /root/.config/aion /root/.pi /root/.pi/agent",
 			],
 		)
 			.exec_exit_code!()?
@@ -531,12 +549,48 @@ wait_for_ssh! = |ip, attempts_left| {
 	}
 }
 
+ssh_reachable! = |ip, user|
+	secretless_command(
+		"timeout",
+		[
+			"--kill-after=5s",
+			"20s",
+			"ssh",
+			"-o",
+			"BatchMode=yes",
+			"-o",
+			"ConnectTimeout=10",
+			"-o",
+			"ConnectionAttempts=1",
+			"-o",
+			"StrictHostKeyChecking=accept-new",
+			"${user}@${ip}",
+			"true",
+		],
+	)
+		.exec_exit_code!()
+
+verify_operator_ssh! = |ip, attempts_left| {
+	if attempts_left == 0 {
+		Err(SshNotReady)
+	} else if ssh_reachable!(ip, "root")? == 0 {
+		Ok("root")
+	} else if ssh_reachable!(ip, "aion")? == 0 {
+		Ok("aion")
+	} else if attempts_left == 1 {
+		Err(SshNotReady)
+	} else {
+		Sleep.seconds!(5)
+		verify_operator_ssh!(ip, attempts_left - 1)
+	}
+}
+
 render_models_config = ||
 	Json.to_str({
 		providers: {
 			ppq: {
 				api: "openai-completions",
-				apiKey: "!cat /home/aion/.config/aion/model-key",
+				apiKey: "!cat /root/.config/aion/model-key",
 				baseUrl: "https://api.ppq.ai/v1",
 				models: [
 					{
@@ -597,7 +651,7 @@ copy_agent_file! = |ip, source, destination|
 			OsStr.utf8("-o"),
 			OsStr.utf8("StrictHostKeyChecking=accept-new"),
 			Path.to_os_str(source),
-			OsStr.utf8("aion@${ip}:${destination}"),
+			OsStr.utf8("root@${ip}:${destination}"),
 		]),
 	)
 
@@ -615,7 +669,7 @@ run_agent_command! = |ip, arguments|
 			OsStr.utf8("ConnectTimeout=10"),
 			OsStr.utf8("-o"),
 			OsStr.utf8("ConnectionAttempts=1"),
-			OsStr.utf8("aion@${ip}"),
+			OsStr.utf8("root@${ip}"),
 		]).concat(arguments),
 	)
 
@@ -646,22 +700,22 @@ enroll_agent_config_stage! = |ip, model_key, directory, key_path, models_path, s
 		["0600", Path.display(key_path), Path.display(models_path), Path.display(settings_path)],
 	).exec_cmd!()?
 	wait_for_ssh!(ip, 30)?
-	copy_agent_file!(ip, key_path, "~/.config/aion/model-key.new")?
-	copy_agent_file!(ip, models_path, "~/.pi/agent/models.json.new")?
-	copy_agent_file!(ip, settings_path, "~/.pi/agent/settings.json.new")?
+	copy_agent_file!(ip, key_path, "/root/.config/aion/model-key.new")?
+	copy_agent_file!(ip, models_path, "/root/.pi/agent/models.json.new")?
+	copy_agent_file!(ip, settings_path, "/root/.pi/agent/settings.json.new")?
 	run_agent_command!(
 		ip,
 		[
 			OsStr.utf8("chmod"),
 			OsStr.utf8("0600"),
-			OsStr.utf8("/home/aion/.config/aion/model-key.new"),
-			OsStr.utf8("/home/aion/.pi/agent/models.json.new"),
-			OsStr.utf8("/home/aion/.pi/agent/settings.json.new"),
+			OsStr.utf8("/root/.config/aion/model-key.new"),
+			OsStr.utf8("/root/.pi/agent/models.json.new"),
+			OsStr.utf8("/root/.pi/agent/settings.json.new"),
 		],
 	)?
-	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/home/aion/.pi/agent/models.json.new"), OsStr.utf8("/home/aion/.pi/agent/models.json")])?
-	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/home/aion/.pi/agent/settings.json.new"), OsStr.utf8("/home/aion/.pi/agent/settings.json")])?
-	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/home/aion/.config/aion/model-key.new"), OsStr.utf8("/home/aion/.config/aion/model-key")])?
+	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/root/.pi/agent/models.json.new"), OsStr.utf8("/root/.pi/agent/models.json")])?
+	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/root/.pi/agent/settings.json.new"), OsStr.utf8("/root/.pi/agent/settings.json")])?
+	run_agent_command!(ip, [OsStr.utf8("mv"), OsStr.utf8("/root/.config/aion/model-key.new"), OsStr.utf8("/root/.config/aion/model-key")])?
 	Ok({})
 }
 
@@ -686,8 +740,8 @@ delete_reconciled_droplets! = |auth, droplets| {
 	}
 }
 
-resolve_droplet_post! = |auth, name, image_id, ssh_key_id, operation_tag| {
-	match DigitalOceanApi.create_droplet_once!(name, image_id, ssh_key_id, operation_tag, auth) {
+resolve_droplet_post! = |auth, name, image_id, ssh_key_ids, operation_tag, provider| {
+	match DigitalOceanApi.create_droplet_once!(name, image_id, ssh_key_ids, operation_tag, provider.region, provider.size, auth) {
 		PostAccepted(droplet) => Ok(droplet)
 		PostUncertain(error) => {
 			AionState.record_creation_status!(operation_status(operation_tag, "Droplet create POST outcome uncertain; reconciling by operation tag at most 6 times")) ?? {}
@@ -730,16 +784,345 @@ resolve_droplet_post! = |auth, name, image_id, ssh_key_id, operation_tag| {
 	}
 }
 
-provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, operator_ssh_access| {
+resolve_project! = |project, machine| {
+	if !valid_artifact(machine) {
+		return Err(InvalidMachineName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
+	}
+	operator_directory = Env.cwd!()?
+	project_directory = Path.utf8(project)
+	if !Path.is_dir!(project_directory)? {
+		return Err(DeploymentProjectMissing(project))
+	}
+	Env.set_cwd!(project_directory)?
+	project_root = Env.cwd!()?
+	resolved = {
+		if !Path.is_file!(Path.utf8("Kaifile"))? {
+			Err(DeploymentKaifileMissing)
+		} else {
+			operator_kai = Path.join(operator_directory, "kai")
+			project_kai = Path.join(project_root, "kai")
+			kai = match Env.var_str!(OsStr.utf8("AION_KAI")) {
+				Ok(configured) if !configured.trim().is_empty() => configured
+				_ => if Path.is_executable!(operator_kai)? {
+					Path.display(operator_kai)
+				} else if Path.is_executable!(project_kai)? {
+					Path.display(project_kai)
+				} else {
+					"kai"
+				}
+			}
+			Ok({ kai, machine, path: Path.display(project_root) })
+		}
+	}
+	restore = Env.set_cwd!(operator_directory)
+	match (resolved, restore) {
+		(Err(error), _) => Err(error)
+		(Ok(_), Err(error)) => Err(error)
+		(Ok(selected), Ok({})) => Ok(selected)
+	}
+}
+
+run_project_kai! = |project, arguments, failure| {
+	operator_directory = Env.cwd!()?
+	Env.set_cwd!(Path.utf8(project.path))?
+	result = secretless_command(project.kai, arguments).exec_exit_code!()
+	restore = Env.set_cwd!(operator_directory)
+	match (result, restore) {
+		(Err(error), _) => Err(error)
+		(Ok(_), Err(error)) => Err(error)
+		(Ok(0), Ok({})) => Ok({})
+		(Ok(_), Ok({})) => Err(failure)
+	}
+}
+
+validate_project! = |project| {
+	run_project_kai!(project, ["machine", project.machine], KaiMachineValidationFailed)?
+	metadata_path = Path.join(
+		Path.utf8(project.path),
+		".kai/artifacts/machines/${project.machine}/metadata.json",
+	)
+	metadata : {
+		backend : Str,
+		flake_attribute : Str,
+		flake_path : Str,
+		kind : Str,
+		name : Str,
+		schema : U64,
+		target_architecture : Str,
+		target_system : Str,
+	}
+	metadata = Json.parse(Path.read_utf8!(metadata_path)?) ? |_|
+		KaiMachineMetadataInvalid(Path.display(metadata_path))
+	expected_attribute = "kaiMachines.\"${project.machine}\".closure"
+	expected_flake = ".kai/machines/${project.machine}"
+	secrets = Path.join(
+		Path.utf8(project.path),
+		".kai/machines/${project.machine}/secrets",
+	)
+	if Path.is_dir!(secrets)? {
+		return Err(KaiMachineSecretsRequirePostBootEnrollment(project.machine))
+	}
+	if metadata.backend == "nix"
+		and metadata.flake_attribute == expected_attribute
+			and metadata.flake_path == expected_flake
+				and metadata.kind == "machine"
+					and metadata.name == project.machine
+						and metadata.schema == 1
+							and metadata.target_architecture == "x86_64"
+								and metadata.target_system == "x86_64-linux" {
+		Ok({})
+	} else {
+		Err(KaiMachineMetadataInvalid(Path.display(metadata_path)))
+	}
+}
+
+render_digital_ocean_module = |machine, image| {
+	module_file = if image "digital-ocean-image.nix" else "digital-ocean-config.nix"
+	image_lines = if image {
+		[
+			"  image.baseName = \"${machine}\";",
+			"  virtualisation.digitalOceanImage.compressionMethod = \"gzip\";",
+		]
+	} else {
+		[]
+	}
+	lines = [
+		"{ lib, modulesPath, ... }:",
+		"{",
+		"  imports = [ (modulesPath + \"/virtualisation/${module_file}\") ];",
+		"  boot.loader.grub.enable = lib.mkForce true;",
+		"  fileSystems.\"/\" = lib.mkForce {",
+		"    device = \"/dev/disk/by-label/nixos\";",
+		"    fsType = \"ext4\";",
+		"    autoResize = true;",
+		"  };",
+		"  users.users.root.hashedPassword = \"!\";",
+		"  virtualisation.digitalOcean = {",
+		"    setRootPassword = false;",
+		"    setSshKeys = true;",
+		"  };",
+		"  services.openssh = {",
+		"    enable = true;",
+		"    settings = {",
+		"      KbdInteractiveAuthentication = false;",
+		"      PasswordAuthentication = false;",
+		"      PermitRootLogin = \"prohibit-password\";",
+		"    };",
+		"  };",
+		"  networking.firewall.allowedTCPPorts = [ 22 ];",
+		"  nix.settings.experimental-features = [ \"nix-command\" \"flakes\" ];",
+	].concat(image_lines).concat(["}"])
+	Str.join_with(lines, "\n")
+}
+
+render_composition_flake = |machine| {
+	lines = [
+		"{",
+		"  inputs.machine.url = \"path:./machine\";",
+		"  outputs = { machine, ... }: {",
+		"    nixosConfigurations.\"${machine}\" =",
+		"      machine.nixosConfigurations.\"${machine}\".extendModules {",
+		"        modules = [ ./digital-ocean.nix ];",
+		"      };",
+		"  };",
+		"}",
+	]
+	Str.join_with(lines, "\n")
+}
+
+build_composition! = |project, image| {
+	kind = if image "images" else "machines"
+	directory = Path.join(
+		Path.utf8(project.path),
+		".kai/aion/${kind}/${project.machine}",
+	)
+	Path.create_all!(directory)?
+	machine_source = Path.join(
+		Path.utf8(project.path),
+		".kai/machines/${project.machine}",
+	)
+	machine_copy = Path.join(directory, "machine")
+	remove_code = secretless_command(
+		"rm",
+		["-rf", "--", Path.display(machine_copy)],
+	)
+		.exec_exit_code!()?
+	if remove_code != 0 {
+		return Err(KaiMachineCompositionFailed(project.machine))
+	}
+	copy_code = secretless_command(
+		"cp",
+		[
+			"--recursive",
+			"--dereference",
+			"--preserve=mode",
+			"--",
+			Path.display(machine_source),
+			Path.display(machine_copy),
+		],
+	)
+		.exec_exit_code!()?
+	if copy_code != 0 {
+		return Err(KaiMachineCompositionFailed(project.machine))
+	}
+	Path.write_utf8!(
+		Path.join(directory, "digital-ocean.nix"),
+		render_digital_ocean_module(project.machine, image),
+	)?
+	Path.write_utf8!(
+		Path.join(directory, "flake.nix"),
+		render_composition_flake(project.machine),
+	)?
+	attribute = if image "image" else "toplevel"
+	out_link = if image {
+		Path.join(
+			Path.utf8(project.path),
+			".kai/artifacts/images/${project.machine}/result",
+		)
+	} else {
+		Path.join(directory, "result")
+	}
+	out_parent = if image {
+		Path.join(
+			Path.utf8(project.path),
+			".kai/artifacts/images/${project.machine}",
+		)
+	} else {
+		directory
+	}
+	Path.create_all!(out_parent)?
+	installable = Str.join_with(
+		[
+			"path:",
+			Path.display(directory),
+			"#nixosConfigurations.\"",
+			project.machine,
+			"\".config.system.build.",
+			attribute,
+		],
+		"",
+	)
+	output = secretless_command(
+		"nix",
+		[
+			"build",
+			"--no-write-lock-file",
+			"--print-out-paths",
+			"--out-link",
+			Path.display(out_link),
+			installable,
+		],
+	)
+		.exec_output!()?
+	paths = output.stdout_utf8
+		.split_on("\n")
+		.keep_if(|path| !path.trim().is_empty())
+	match paths {
+		[closure] if closure.starts_with("/nix/store/") => Ok(closure)
+		_ => Err(KaiMachineCompositionFailed(project.machine))
+	}
+}
+
+prepare_project! = |project| {
+	validate_project!(project)?
+	closure = build_composition!(project, Bool.False)?
+	Ok({ closure, kai: project.kai, machine: project.machine, path: project.path })
+}
+
+pin_pending_closure! = |closure| {
+	root = Path.join(Env.cwd!()?, ".aion/create.pending/closure-root")
+	_ = secretless_command(
+		"nix-store",
+		[
+			"--add-root",
+			Path.display(root),
+			"--indirect",
+			"--realise",
+			closure,
+		],
+	)
+		.exec_output!()?
+	Ok({})
+}
+
+build_base_image! = |machine| {
+	project = resolve_project!(".", machine)?
+	validate_project!(project)?
+	_ = build_composition!(project, Bool.True)?
+	image = Path.join(
+		Path.utf8(project.path),
+		".kai/artifacts/images/${machine}/result/${machine}.qcow2.gz",
+	)
+	if Path.is_file!(image)? {
+		Stdout.line!("built reusable DigitalOcean image ${Path.display(image)}")
+	} else {
+		Err(KaiMachineImageMissing(Path.display(image)))
+	}
+}
+
+activate_project! = |project, ip| {
+	copy_code = secretless_command(
+		"timeout",
+		[
+			"--kill-after=30s",
+			"30m",
+			"nix",
+			"copy",
+			"--to",
+			"ssh://root@${ip}",
+			project.closure,
+		],
+	)
+		.exec_exit_code!()?
+	if copy_code != 0 {
+		return Err(KaiMachineActivationFailed)
+	}
+	switch_code = secretless_command(
+		"timeout",
+		[
+			"--kill-after=30s",
+			"10m",
+			"ssh",
+			"-o",
+			"BatchMode=yes",
+			"-o",
+			"StrictHostKeyChecking=accept-new",
+			"root@${ip}",
+			Str.join_with(
+				[
+					"nix-env --profile /nix/var/nix/profiles/system --set ",
+					project.closure,
+					" && ",
+					project.closure,
+					"/bin/switch-to-configuration switch",
+				],
+				"",
+			),
+		],
+	)
+		.exec_exit_code!()?
+	if switch_code == 0 Ok({}) else Err(KaiMachineActivationFailed)
+}
+
+provision_created! = |auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, operator_ssh_access, project, provider| {
 	AionState.record_created!(droplet.id)?
 	active = poll_droplet!(auth, droplet.id, 40)?
+	if active.region.slug != provider.region or active.size_slug != provider.size {
+		return Err(DropletProviderMismatch({ actual_region: active.region.slug, actual_size: active.size_slug, expected_region: provider.region, expected_size: provider.size }))
+	}
 	ip = DigitalOcean.public_ipv4(active) ? |_| DropletPollTimeout
+	provenance = match project {
+		Some(selected) if operator_ssh_access => {
+			wait_for_ssh!(ip, 30)?
+			activate_project!(selected, ip)?
+			{ machine: selected.machine, project: selected.path }
+		}
+		_ => { machine: "", project: "" }
+	}
 	if provision_agent {
 		enroll_agent_config!(ip, model_key)?
-	} else if operator_ssh_access {
-		wait_for_ssh!(ip, 30)?
 	}
-	AionState.save_machine!({ id: active.id, ip, name, operation_tag, operator_ssh_access, ssh_key_id })?
+	AionState.save_machine!({ id: active.id, ip, machine: provenance.machine, name, operation_tag, operator_ssh_access, project: provenance.project, region: provider.region, size: provider.size, ssh_key_id, ssh_user: "root" })?
 	Ok(ip)
 }
 
@@ -762,7 +1145,16 @@ cleanup_created! = |auth, droplet_id, operation_tag, failure| {
 	}
 }
 
-create! = |name, payment_authorized, provision_agent, requested_access_key| {
+create! = |name, payment_authorized, provision_agent, requested_access_key, project| {
+	operator_ssh_access = requested_access_key.is_empty()
+	if operator_ssh_access {
+		match project {
+			Some(_) => {}
+			None => return Err(MissingActivationProject)
+		}
+	} else if provision_agent {
+		return Err(CustomerProvisioningForbidden)
+	}
 	if !valid_name(name) {
 		Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
 	} else if AionState.has_machine!(name)? {
@@ -772,8 +1164,22 @@ create! = |name, payment_authorized, provision_agent, requested_access_key| {
 		if provision_agent and model_key.trim().is_empty() {
 			Err(EmptyModelKey)
 		} else {
+			provider = provider_config!()?
 			image = AionState.read_image!()?
-			operator_ssh_access = requested_access_key.is_empty()
+			if image.region != provider.region {
+				return Err(ImageRegionMismatch({ image_region: image.region, requested_region: provider.region }))
+			}
+			if image.ssh_user != "root" {
+				return Err(LegacyImageNotReusable("delete the historical image state and import the current reusable image before creating a machine"))
+			}
+			prepared_project = if operator_ssh_access {
+				match project {
+					Some(selected) => Some(prepare_project!(selected)?)
+					None => return Err(MissingActivationProject)
+				}
+			} else {
+				None
+			}
 			public_key = if operator_ssh_access {
 				home = require_env!("HOME", "needed to locate ~/.ssh/id_ed25519.pub")?
 				validate_ssh_key!(Path.read_utf8!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?)?
@@ -781,11 +1187,21 @@ create! = |name, payment_authorized, provision_agent, requested_access_key| {
 				validate_ssh_key!(requested_access_key)?
 			}
 			if !payment_authorized {
-				confirm_operation!("This creates one s-2vcpu-4gb Droplet in nyc3 and starts hourly billing.", "create ${name}")?
+				confirm_operation!("This creates one ${provider.size} Droplet in ${provider.region} and starts hourly billing.", "create ${name}")?
 			}
 			auth = token!()?
 			operation_tag = operation_tag!("droplet")?
-			AionState.begin_creation!(name, operation_tag)?
+			AionState.begin_creation!(name, operation_tag, prepared_project, provision_agent, provider.region, provider.size)?
+			match prepared_project {
+				Some(selected) => match pin_pending_closure!(selected.closure) {
+					Ok({}) => {}
+					Err(error) => {
+						AionState.clear_creation!() ?? {}
+						return Err(error)
+					}
+				}
+				None => {}
+			}
 			Stdout.line!("Droplet create operation tag ${operation_tag}; pending state is under .aion/create.pending/")?
 			existing = match DigitalOceanApi.list_droplets_by_tag!("aion", auth) {
 				Ok(droplets) => droplets
@@ -795,11 +1211,12 @@ create! = |name, payment_authorized, provision_agent, requested_access_key| {
 					return Err(error)
 				}
 			}
-			if !List.is_empty(existing) {
-				ids = resource_ids(existing)
-				AionState.record_creation_status!(operation_status(operation_tag, "Refused before POST because tagged Aion Droplet IDs already exist: ${ids}")) ?? {}
-				Stderr.line!("create refused because existing Aion Droplets may still be billing:")?
-				print_existing_droplets!(existing)?
+			same_name = existing.keep_if(|droplet| droplet.name == name)
+			if !same_name.is_empty() {
+				ids = resource_ids(same_name)
+				AionState.record_creation_status!(operation_status(operation_tag, "Refused before POST because same-name Aion Droplet IDs already exist: ${ids}")) ?? {}
+				Stderr.line!("create refused because same-name Aion Droplets may still be billing:")?
+				print_existing_droplets!(same_name)?
 				Stderr.line!("  inspect everything: aion resources")?
 				AionState.clear_creation!()?
 				return Err(AionDropletAlreadyExists(ids))
@@ -817,15 +1234,15 @@ create! = |name, payment_authorized, provision_agent, requested_access_key| {
 				ReusedKey(reused) => reused.id
 			}
 			AionState.record_creation_access!(operator_ssh_access, ssh_key_id)?
-			droplet = resolve_droplet_post!(auth, name, image.id, ssh_key_id, operation_tag)?
-			match provision_created!(auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, operator_ssh_access) {
+			droplet = resolve_droplet_post!(auth, name, image.id, [ssh_key_id], operation_tag, provider)?
+			match provision_created!(auth, droplet, name, ssh_key_id, model_key, operation_tag, provision_agent, operator_ssh_access, prepared_project, provider) {
 				Err(error) => cleanup_created!(auth, droplet.id, operation_tag, error)
 				Ok(ip) => {
 					match AionState.clear_creation!() {
 						Err(_) => Stderr.line!("warning: machine state was saved but pending state remains; Droplet ID ${U64.to_str(droplet.id)}, operation tag ${operation_tag}") ?? {}
 						Ok({}) => {}
 					}
-					_ = Stdout.line!("machine '${name}' active at ${ip} (Droplet ID ${U64.to_str(droplet.id)}, operation tag ${operation_tag})") ?? {}
+					_ = Stdout.line!("machine '${name}' active at ${ip} (${provider.region}, ${provider.size}; Droplet ID ${U64.to_str(droplet.id)}, operation tag ${operation_tag})") ?? {}
 					Ok({})
 				}
 			}
@@ -833,40 +1250,21 @@ create! = |name, payment_authorized, provision_agent, requested_access_key| {
 	}
 }
 
+create_agent! = |name, payment_authorized, requested_access_key, provision_agent| {
+	if requested_access_key.is_empty() {
+		project = resolve_project!(".", "agent")?
+		create!(name, payment_authorized, provision_agent, requested_access_key, Some(project))
+	} else {
+		create!(name, payment_authorized, Bool.False, requested_access_key, None)
+	}
+}
+
 create_with_key_file! = |name, path| {
 	key = Path.read_utf8!(Path.utf8(path))?
-	if key.trim().is_empty() Err(InvalidSshPublicKey("public key file is empty")) else create!(name, Bool.False, Bool.False, key)
-}
-
-kai_command! = |operator_directory| {
-	match Env.var_str!(OsStr.utf8("AION_KAI")) {
-		Ok(command) if !command.trim().is_empty() => Ok(command)
-		_ => {
-			project_kai = Path.join(operator_directory, "kai")
-			if Path.is_executable!(project_kai)? {
-				Ok(Path.display(project_kai))
-			} else {
-				Ok("kai")
-			}
-		}
-	}
-}
-
-project_create_preflight! = |name| {
-	if !valid_name(name) {
-		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
-	}
-	if AionState.has_machine!(name)? {
-		return Err(MachineAlreadyExists("run 'aion status' for local state and 'aion resources' for provider IDs and IPs"))
-	}
-	existing = DigitalOceanApi.list_droplets_by_tag!("aion", token!()?)?
-	if existing.is_empty() {
-		Ok({})
+	if key.trim().is_empty() {
+		Err(InvalidSshPublicKey("public key file is empty"))
 	} else {
-		Stderr.line!("create refused because existing Aion Droplets may still be billing:")?
-		print_existing_droplets!(existing)?
-		Stderr.line!("  inspect everything: aion resources")?
-		Err(AionDropletAlreadyExists(resource_ids(existing)))
+		create_agent!(name, Bool.False, key, Bool.True)
 	}
 }
 
@@ -913,53 +1311,9 @@ products! = || {
 	}
 }
 
-build_project_image! = |project, machine| {
-	operator_directory = Env.cwd!()?
-	project_directory = Path.utf8(project)
-	if !Path.is_dir!(project_directory)? {
-		return Err(DeploymentProjectMissing(project))
-	}
-	Env.set_cwd!(project_directory)?
-	project_root = Env.cwd!()?
-	kai_command = kai_command!(project_root)?
-	result = Cmd.new_str(kai_command).args_str(["image", machine]).exec_exit_code!()
-	image = Path.join(project_root, ".kai/artifacts/images/${machine}/result/${machine}.qcow2")
-	identity = match secretless_command("realpath", [Path.display(image)]).exec_output!() {
-		Ok(output) => output.stdout_utf8.trim()
-		Err(_) => ""
-	}
-	restore = Env.set_cwd!(operator_directory)
-	match (result, restore) {
-		(Err(error), _) => Err(error)
-		(Ok(_), Err(error)) => Err(error)
-		(Ok(0), Ok({})) => if Path.is_file!(image)? and !identity.is_empty() Ok({ identity, image, project: Path.display(project_root) }) else Err(ProjectImageMissing(Path.display(image)))
-		(Ok(_), Ok({})) => Err(KaiImageBuildFailed)
-	}
-}
-
 create_project! = |name, project, machine| {
-	if !valid_artifact(machine) {
-		return Err(InvalidMachineName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
-	}
-	project_create_preflight!(name)?
-	built = build_project_image!(project, machine)?
-	if AionState.has_saved_image!()? {
-		saved = AionState.read_project_image!()?
-		if saved.machine != machine or saved.project != built.project or saved.image != built.identity {
-			return Err(ProjectImageMismatch("delete the saved image before selecting another project machine or build"))
-		}
-	} else {
-		match image_import_local!(built.image) {
-			Err(error) => {
-				if AionState.has_saved_image!() ?? Bool.False {
-					AionState.save_project_image!({ image: built.identity, machine, project: built.project }) ?? {}
-				}
-				return Err(error)
-			}
-			Ok({}) => AionState.save_project_image!({ image: built.identity, machine, project: built.project })?
-		}
-	}
-	create!(name, Bool.False, Bool.False, "")
+	selected = resolve_project!(project, machine)?
+	create!(name, Bool.False, Bool.False, "", Some(selected))
 }
 
 create_product! = |name, product_name| {
@@ -983,7 +1337,8 @@ recover! = |name, id| {
 	if AionState.has_saved_machine!(name)? {
 		return Err(MachineAlreadyExists("saved machine state already exists; run 'aion status'"))
 	}
-	if AionState.has_pending_creation!()? {
+	has_pending = AionState.has_pending_creation!()?
+	if has_pending {
 		pending_name = AionState.read_pending_creation_name!()?
 		pending_id = AionState.read_pending_creation_id!()?
 		if pending_name != name or pending_id != id {
@@ -997,7 +1352,7 @@ recover! = |name, id| {
 	if droplet.name != name or droplet.status != "active" or !List.any(droplet.tags, |tag| tag == "aion") {
 		return Err(DropletNotRecoverable({ id, name, status: droplet.status }))
 	}
-	if AionState.has_pending_creation!()? {
+	if has_pending {
 		pending_tag = AionState.read_pending_creation_operation_tag!()?
 		if pending_tag != operation_tag {
 			return Err(PendingCreationTagDoesNotMatch)
@@ -1008,16 +1363,51 @@ recover! = |name, id| {
 	} else {
 		{ operator_ssh_access: Bool.True, ssh_key_id: operator_ssh_key!(auth)?.id }
 	}
-	if access.operator_ssh_access {
-		if AionState.has_project_image!()? {
-			wait_for_ssh!(ip, 30)?
+	has_project = has_pending and AionState.has_pending_creation_project!()?
+	project = if has_project {
+		project_path = AionState.read_pending_creation_project!()?
+		machine = AionState.read_pending_creation_machine!()?
+		prepared = if AionState.has_pending_creation_closure!()? {
+			closure = AionState.read_pending_creation_closure!()?
+			if Path.is_dir!(Path.utf8(closure))? {
+				{ closure, kai: "", machine, path: project_path }
+			} else {
+				return Err(InvalidPendingCreationState)
+			}
 		} else {
-			model_key = require_nonempty_env!("AION_MODEL_API_KEY", "needed to finish agent provisioning")?
-			enroll_agent_config!(ip, model_key)?
+			selected = resolve_project!(project_path, machine)?
+			prepare_project!(selected)?
+		}
+		Some(prepared)
+	} else {
+		None
+	}
+	provider = { region: droplet.region.slug, size: droplet.size_slug }
+	if has_pending and AionState.has_pending_creation_provider!()? {
+		expected = AionState.read_pending_creation_provider!()?
+		if expected != provider {
+			return Err(DropletProviderMismatch({ actual_region: provider.region, actual_size: provider.size, expected_region: expected.region, expected_size: expected.size }))
 		}
 	}
-	AionState.save_machine!({ id, ip, name, operation_tag, operator_ssh_access: access.operator_ssh_access, ssh_key_id: access.ssh_key_id })?
-	if AionState.has_pending_creation!()? {
+	recovered = if access.operator_ssh_access {
+		match project {
+			Some(selected) => {
+				model_key = if AionState.read_pending_creation_provision_agent!()? require_nonempty_env!("AION_MODEL_API_KEY", "needed to finish agent provisioning")? else ""
+				wait_for_ssh!(ip, 30)?
+				activate_project!(selected, ip)?
+				if !model_key.is_empty() {
+					enroll_agent_config!(ip, model_key)?
+				}
+				{ machine: selected.machine, project: selected.path, ssh_user: "root" }
+			}
+			None => { machine: "", project: "", ssh_user: verify_operator_ssh!(ip, 30)? }
+		}
+	} else {
+		ssh_user = if has_pending and !AionState.has_pending_creation_provider!()? "aion" else "root"
+		{ machine: "", project: "", ssh_user }
+	}
+	AionState.save_machine!({ id, ip, machine: recovered.machine, name, operation_tag, operator_ssh_access: access.operator_ssh_access, project: recovered.project, region: provider.region, size: provider.size, ssh_key_id: access.ssh_key_id, ssh_user: recovered.ssh_user })?
+	if has_pending {
 		AionState.clear_creation!()?
 	}
 	Stdout.line!("recovered machine '${name}' at ${ip} (Droplet ID ${U64.to_str(id)}, operation tag ${operation_tag})")
@@ -1029,57 +1419,29 @@ recover_argument! = |name, id|
 		Err(_) => Err(InvalidDropletId(id))
 	}
 
-deploy_in_project! = |kai_command, machine, artifact| {
-	kaifile = Path.utf8("Kaifile")
-	if !Path.is_file!(kaifile)? {
-		return Err(DeploymentKaifileMissing)
-	}
-	deployment = "aion-${artifact}"
-	generated = Path.utf8(".kai/aion-deploy.Kaifile")
-	Path.create_all!(Path.utf8(".kai"))?
-	config = Path.read_utf8!(kaifile)?
-	Path.write_utf8!(
-		generated,
-		"${config}\n\ndeploy ${deployment} {\n  artifact: \"${artifact}\"\n  to: \"ssh://aion@${machine.ip}\"\n}\n",
-	)?
-	result = Cmd.new_str(kai_command)
-		.args_str(["-f", Path.display(generated), "deploy", deployment])
-		.exec_exit_code!()
-	cleanup = Path.delete!(generated)
-	match (result, cleanup) {
-		(Err(error), _) => Err(error)
-		(Ok(_), Err(error)) => Err(error)
-		(Ok(0), Ok({})) => {
-			Stdout.line!("deployed artifact '${artifact}' to machine '${machine.name}'")?
-			Stdout.line!("remote artifact: /home/aion/.local/state/kai/deployments/${deployment}/current")
-		}
-		(Ok(_), Ok({})) => Err(KaiDeploymentFailed)
-	}
-}
-
-deploy! = |machine_name, artifact, project| {
+deploy! = |machine_name, kai_machine, project| {
 	if !valid_name(machine_name) {
 		return Err(InvalidMachineName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
 	}
-	if !valid_artifact(artifact) {
-		return Err(InvalidArtifactName("use ASCII letters, digits, '.', '_', and internal '-' characters"))
-	}
 	machine = AionState.read_machine!(machine_name)?
-	operator_directory = Env.cwd!()?
-	project_directory = Path.utf8(project)
-	if !Path.is_dir!(project_directory)? {
-		return Err(DeploymentProjectMissing(project))
-	}
-	Env.set_cwd!(project_directory)?
-	project_root = Env.cwd!()?
-	kai_command = kai_command!(project_root)?
-	result = deploy_in_project!(kai_command, machine, artifact)
-	restore = Env.set_cwd!(operator_directory)
-	match (result, restore) {
-		(Err(error), _) => Err(error)
-		(Ok({}), Err(error)) => Err(error)
-		(Ok({}), Ok({})) => Ok({})
-	}
+	selected = resolve_project!(project, kai_machine)?
+	prepared = prepare_project!(selected)?
+	wait_for_ssh!(machine.ip, 30)?
+	activate_project!(prepared, machine.ip)?
+	AionState.save_machine!({
+		id: machine.id,
+		ip: machine.ip,
+		machine: kai_machine,
+		name: machine.name,
+		operation_tag: machine.operation_tag,
+		operator_ssh_access: machine.operator_ssh_access,
+		project: selected.path,
+		region: machine.region,
+		size: machine.size,
+		ssh_key_id: machine.ssh_key_id,
+		ssh_user: machine.ssh_user,
+	})?
+	Stdout.line!("activated Kai machine '${kai_machine}' on saved machine '${machine.name}'")
 }
 
 everpaid_create_invoice! = |name, reference| {
@@ -1104,9 +1466,18 @@ payment_preflight! = |name| {
 	if AionState.has_machine!(name)? {
 		return Err(MachineAlreadyExists("local machine state or a create operation already exists"))
 	}
-	_ = AionState.read_image!()?
-	existing = DigitalOceanApi.list_droplets_by_tag!("aion", token!()?)?
-	if List.is_empty(existing) Ok({}) else Err(AionDropletAlreadyExists(resource_ids(existing)))
+	image = AionState.read_image!()?
+	provider = provider_config!()?
+	if image.region != provider.region {
+		return Err(ImageRegionMismatch({ image_region: image.region, requested_region: provider.region }))
+	}
+	if image.ssh_user != "root" {
+		return Err(LegacyImageNotReusable("delete the historical image state and import the current reusable image before accepting payment"))
+	}
+	selected = resolve_project!(".", "agent")?
+	_ = prepare_project!(selected)?
+	existing = DigitalOceanApi.list_droplets_by_tag!("aion", token!()?)?.keep_if(|droplet| droplet.name == name)
+	if existing.is_empty() Ok({}) else Err(AionDropletAlreadyExists(resource_ids(existing)))
 }
 
 create_paid! = |name| {
@@ -1126,7 +1497,7 @@ create_paid! = |name| {
 	}
 	access_key = if order.ssh_public_key.is_empty() "" else validate_ssh_key!(order.ssh_public_key)?
 	if access_key.is_empty() {
-		_ = require_nonempty_env!("AION_MODEL_API_KEY", "needed to provision this legacy order")?
+		_ = require_nonempty_env!("AION_MODEL_API_KEY", "needed to provision the default agent")?
 	}
 	if access_key != order.ssh_public_key
 		or payment.status != "settled"
@@ -1136,11 +1507,13 @@ create_paid! = |name| {
 						or !Everpaid.reference_matches_machine(payment.reference, name) {
 		Err(PaymentNotAuthorized)
 	} else {
+		selected = resolve_project!(".", "agent")?
+		_ = prepare_project!(selected)?
 		consumed = Path.utf8(".aion/payments/${name}.consumed")
 		Path.create_all!(Path.utf8(".aion/payments"))?
 		Path.create_dir!(consumed)?
 		Path.write_utf8!(Path.join(consumed, "payment-id"), payment_id)?
-		if access_key.is_empty() create!(name, Bool.True, Bool.True, "") else create!(name, Bool.True, Bool.False, access_key)
+		create_agent!(name, Bool.True, access_key, Bool.True)
 	}
 }
 
@@ -1321,7 +1694,8 @@ print_machine_snapshots! = |snapshots|
 			print_machine_snapshots!(rest)
 		}
 		[SavedMachine(machine), .. as rest] => {
-			Stdout.line!("  ${Ansi.cyan(machine.name)}: ${Ansi.green("recorded")}, id ${Ansi.dim(U64.to_str(machine.id))}, ip ${Ansi.cyan(machine.ip)}, operation ${Ansi.dim(machine.operation_tag)}")?
+			activation = if machine.project.is_empty() "" else ", activation ${machine.project} machine ${Ansi.cyan(machine.machine)}"
+			Stdout.line!("  ${Ansi.cyan(machine.name)}: ${Ansi.green("recorded")}, id ${Ansi.dim(U64.to_str(machine.id))}, ip ${Ansi.cyan(machine.ip)}, ${machine.region}/${machine.size}${activation}, operation ${Ansi.dim(machine.operation_tag)}")?
 			print_machine_snapshots!(rest)
 		}
 	}
@@ -1350,7 +1724,7 @@ status! = || {
 		Ok(Bool.False) => Stdout.line!("${Ansi.bold("image:")} ${Ansi.dim("none recorded")}")?
 		Ok(Bool.True) => match AionState.read_image!() {
 			Err(_) => Stdout.line!("${Ansi.bold("image:")} ${Ansi.red("invalid local state")}")?
-			Ok(image) => Stdout.line!("${Ansi.bold("image:")} ${Ansi.green("recorded")} '${Ansi.cyan(image.name)}', id ${Ansi.dim(U64.to_str(image.id))}, operation ${Ansi.dim(image.operation_tag)}")?
+			Ok(image) => Stdout.line!("${Ansi.bold("image:")} ${Ansi.green("recorded")} '${Ansi.cyan(image.name)}', id ${Ansi.dim(U64.to_str(image.id))}, region ${Ansi.cyan(image.region)}, operation ${Ansi.dim(image.operation_tag)}")?
 		}
 	}
 	machines = AionState.read_machines!()?
@@ -1359,14 +1733,6 @@ status! = || {
 		Stdout.line!(Ansi.dim("  none recorded"))?
 	} else {
 		print_machine_snapshots!(machines)?
-	}
-	if AionState.has_project_image!()? {
-		match AionState.read_project_image!() {
-			Err(_) => Stdout.line!("${Ansi.bold("project image:")} ${Ansi.red("invalid local state")}")?
-			Ok(project) => Stdout.line!("${Ansi.bold("project image:")} machine ${Ansi.cyan(project.machine)}, project ${project.project}, build ${Ansi.dim(project.image)}")?
-		}
-	} else {
-		Stdout.line!("${Ansi.bold("project image:")} ${Ansi.dim("none recorded")}")?
 	}
 	if AionState.has_image_operation!()? {
 		Stdout.line!(Ansi.yellow("image operation lock: active; inspect running processes before removing .aion/image.operation"))?
@@ -1386,6 +1752,22 @@ status! = || {
 			Err(_) => Stdout.line!("pending machine create: status unreadable")?
 			Ok(pending) => print_pending!("pending machine create", pending)?
 		}
+		match AionState.has_pending_creation_project!() {
+			Err(_) => Stdout.line!("  activation: ${Ansi.red("metadata incomplete")}")?
+			Ok(Bool.False) => Stdout.line!("  activation: ${Ansi.dim("none recorded")}")?
+			Ok(Bool.True) => match (AionState.read_pending_creation_project!(), AionState.read_pending_creation_machine!()) {
+				(Ok(project), Ok(machine)) => Stdout.line!("  activation: ${project} machine ${Ansi.cyan(machine)}")?
+				_ => Stdout.line!("  activation: ${Ansi.red("unreadable")}")?
+			}
+		}
+		match AionState.has_pending_creation_provider!() {
+			Err(_) => Stdout.line!("  provider: ${Ansi.red("metadata incomplete")}")?
+			Ok(Bool.False) => Stdout.line!("  provider: ${Ansi.dim("not recorded")}")?
+			Ok(Bool.True) => match AionState.read_pending_creation_provider!() {
+				Err(_) => Stdout.line!("  provider: ${Ansi.red("unreadable")}")?
+				Ok(provider) => Stdout.line!("  provider: ${provider.region}/${provider.size}")?
+			}
+		}
 	} else {
 		Stdout.line!("${Ansi.bold("pending machine create:")} ${Ansi.dim("none")}")?
 	}
@@ -1396,7 +1778,7 @@ status! = || {
 	}
 }
 
-ssh_probe! = |ip| {
+ssh_probe! = |ip, user| {
 	exit_code = secretless_command(
 		"timeout",
 		[
@@ -1413,7 +1795,7 @@ ssh_probe! = |ip| {
 			"StrictHostKeyChecking=yes",
 			"-o",
 			"UpdateHostKeys=no",
-			"aion@${ip}",
+			"${user}@${ip}",
 			"true",
 		],
 	)
@@ -1429,22 +1811,22 @@ check! = |name| {
 	if machine.name != name {
 		return Err(MachineStateMismatch)
 	}
-	Stdout.line!("${Ansi.bold("local:")} name ${Ansi.cyan(machine.name)}, id ${Ansi.dim(U64.to_str(machine.id))}, ip ${Ansi.cyan(machine.ip)}, operation ${Ansi.dim(machine.operation_tag)}")?
+	Stdout.line!("${Ansi.bold("local:")} name ${Ansi.cyan(machine.name)}, id ${Ansi.dim(U64.to_str(machine.id))}, ip ${Ansi.cyan(machine.ip)}, ${machine.region}/${machine.size}, operation ${Ansi.dim(machine.operation_tag)}")?
 	droplet = DigitalOceanApi.get_droplet!(machine.id, token!()?)?
 	addresses = DigitalOcean.public_ipv4s(droplet)
 	ip_list = Str.join_with(addresses, ",")
 	provider_ips = if ip_list.is_empty() "none" else ip_list
-	Stdout.line!("${Ansi.bold("provider:")} name ${Ansi.cyan(droplet.name)}, status ${provider_status_color(droplet.status)}, ips ${Ansi.cyan(provider_ips)}")?
+	Stdout.line!("${Ansi.bold("provider:")} name ${Ansi.cyan(droplet.name)}, status ${provider_status_color(droplet.status)}, ips ${Ansi.cyan(provider_ips)}, ${droplet.region.slug}/${droplet.size_slug}")?
 	has_aion_tag = List.any(droplet.tags, |tag| tag == "aion")
 	has_operation_tag = machine.operation_tag == "legacy-unknown" or List.any(droplet.tags, |tag| tag == machine.operation_tag)
 	ip_matches = List.any(addresses, |ip| ip == machine.ip)
-	if droplet.name != machine.name or droplet.status != "active" or !has_aion_tag or !has_operation_tag or !ip_matches {
+	if droplet.name != machine.name or droplet.status != "active" or !has_aion_tag or !has_operation_tag or !ip_matches or droplet.region.slug != machine.region or droplet.size_slug != machine.size {
 		Stdout.line!(Ansi.yellow("ssh: skipped because local and provider state do not agree"))?
 		Err(MachineStateMismatch)
 	} else if !machine.operator_ssh_access {
 		Stdout.line!(Ansi.dim("ssh: not probed; access belongs to the customer key"))
 	} else {
-		match ssh_probe!(machine.ip) {
+		match ssh_probe!(machine.ip, machine.ssh_user) {
 			Err(error) => {
 				Stdout.line!(Ansi.red("ssh: unreachable or host key not trusted"))?
 				Err(error)
@@ -1462,21 +1844,21 @@ shell! = |name, run_pi| {
 	base = [
 		OsStr.utf8("-o"),
 		OsStr.utf8("StrictHostKeyChecking=accept-new"),
-		OsStr.utf8("aion@${machine.ip}"),
+		OsStr.utf8("${machine.ssh_user}@${machine.ip}"),
 	]
 	arguments = if run_pi [OsStr.utf8("-t")].concat(base).concat([OsStr.utf8("pi")]) else base
 	Cmd.exec!(OsStr.utf8("ssh"), arguments)
 }
 
 image_status! = || {
-	id = if AionState.has_saved_image!()? {
+	local = if AionState.has_saved_image!()? {
 		image = AionState.read_image!()?
-		image.id
+		{ id: image.id, region: image.region }
 	} else {
-		AionState.read_pending_image_id!()?
+		{ id: AionState.read_pending_image_id!()?, region: AionState.read_pending_image_region!()? }
 	}
-	image = DigitalOceanApi.get_image!(id, token!()?)?
-	Stdout.line!("image '${Ansi.cyan(image.name)}' (id ${Ansi.dim(U64.to_str(image.id))}) is ${provider_status_color(image.status)}")
+	image = DigitalOceanApi.get_image!(local.id, token!()?)?
+	Stdout.line!("image '${Ansi.cyan(image.name)}' (id ${Ansi.dim(U64.to_str(image.id))}) in ${Ansi.cyan(local.region)} is ${provider_status_color(image.status)}")
 }
 
 image_reconcile_locked! = || {
@@ -1494,7 +1876,9 @@ image_reconcile_locked! = || {
 		} else if AionState.has_saved_image!()? {
 			Err(ImageAlreadyExists)
 		} else {
-			AionState.save_image!({ id: image.id, name: image.name, operation_tag })?
+			ssh_user = if AionState.has_pending_image_region!()? "root" else "aion"
+			region = AionState.read_pending_image_region!()?
+			AionState.save_image!({ id: image.id, name: image.name, operation_tag, region, ssh_user })?
 			status = match AionState.read_pending_image_status!() {
 				Ok(previous) => "${previous.trim()}\n"
 				Err(_) => "Operation tag ${operation_tag}\n"
@@ -1525,7 +1909,8 @@ image_delete_locked! = || {
 		{ image, saved: Bool.True }
 	} else {
 		pending_id = AionState.read_pending_image_id!()?
-		{ image: { id: pending_id, name: "pending import", operation_tag: "see .aion/image.pending/operation-tag" }, saved: Bool.False }
+		region = AionState.read_pending_image_region!()?
+		{ image: { id: pending_id, name: "pending import", operation_tag: "see .aion/image.pending/operation-tag", region, ssh_user: "" }, saved: Bool.False }
 	}
 	id = U64.to_str(candidate.image.id)
 	confirm_operation!("This permanently deletes imported image '${candidate.image.name}' (id ${id}).", "delete image ${id}")?
@@ -1599,6 +1984,7 @@ main! = |args| {
 		["status"] => status!()
 		["resources"] => resources!()
 		["machines"] => machines!()
+		["images", "build", machine] => build_base_image!(machine)
 		["images", "import", url] => image_import!(url)
 		["images", "import-local", path] => image_import_local!(Path.utf8(path))
 		["images", "status"] => image_status!()
@@ -1610,7 +1996,7 @@ main! = |args| {
 		["image", "reconcile"] => image_reconcile!()
 		["image", "delete"] => image_delete!()
 		["products"] => products!()
-		["create", name] => create!(name, Bool.False, Bool.True, "")
+		["create", name] => create_agent!(name, Bool.False, "", Bool.True)
 		["create", name, "--ssh-public-key-file", path] => create_with_key_file!(name, path)
 		["create", name, product] => create_product!(name, product)
 		["create", name, "--project", project, "--machine", machine] => create_project!(name, project, machine)
@@ -1619,8 +2005,8 @@ main! = |args| {
 		["everpaid-create-invoice", name, reference] => everpaid_create_invoice!(name, reference)
 		["everpaid-get-payment", id] => everpaid_get_payment!(id)
 		["payment-preflight", name] => payment_preflight!(name)
-		["deploy", machine, artifact] => deploy!(machine, artifact, ".")
-		["deploy", machine, artifact, "--project", project] => deploy!(machine, artifact, project)
+		["deploy", saved, machine] => deploy!(saved, machine, ".")
+		["deploy", saved, machine, "--project", project] => deploy!(saved, machine, project)
 		["machine", name, "status"] => check!(name)
 		["machine", name, "shell"] => shell!(name, Bool.False)
 		["machine", name, "shell", "pi"] => shell!(name, Bool.True)

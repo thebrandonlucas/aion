@@ -9,17 +9,17 @@ DigitalOcean := [].{
 	SshKeysResponse : { ssh_keys : List(SshKey) }
 
 	Network : { ip_address : Str, type : Str }
-	Droplet : { id : U64, name : Str, networks : { v4 : List(Network) }, status : Str, tags : List(Str) }
+	Droplet : { id : U64, name : Str, networks : { v4 : List(Network) }, region : { slug : Str }, size_slug : Str, status : Str, tags : List(Str) }
 	DropletResponse : { droplet : Droplet }
 	DropletsResponse : { droplets : List(Droplet) }
 
-	image_import_body : Str, Str -> { distribution : Str, name : Str, region : Str, tags : List(Str), url : Str }
-	image_import_body = |url, operation_tag|
-		{ distribution: "NixOS", name: operation_tag, region: "nyc3", tags: ["aion", operation_tag], url }
+	image_import_body : Str, Str, Str -> { distribution : Str, name : Str, region : Str, tags : List(Str), url : Str }
+	image_import_body = |url, operation_tag, region|
+		{ distribution: "NixOS", name: operation_tag, region, tags: ["aion", operation_tag], url }
 
-	droplet_create_body : Str, U64, U64, Str -> { image : U64, name : Str, region : Str, size : Str, ssh_keys : List(U64), tags : List(Str) }
-	droplet_create_body = |name, image_id, ssh_key_id, operation_tag|
-		{ image: image_id, name, region: "nyc3", size: "s-2vcpu-4gb", ssh_keys: [ssh_key_id], tags: ["aion", operation_tag] }
+	droplet_create_body : Str, U64, List(U64), Str, Str, Str -> { image : U64, name : Str, region : Str, size : Str, ssh_keys : List(U64), tags : List(Str) }
+	droplet_create_body = |name, image_id, ssh_keys, operation_tag, region, size|
+		{ image: image_id, name, region, size, ssh_keys, tags: ["aion", operation_tag] }
 
 	public_ipv4s = |droplet|
 		droplet.networks.v4.keep_if(|network| network.type == "public").map(|network| network.ip_address)
