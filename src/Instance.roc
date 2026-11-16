@@ -33,4 +33,39 @@ Instance := [].{
 		}
 		Ok({})
 	}
+
+	# What aion knows of a launch, beside its project. `status` is
+	# "creating" from just before the droplet POST, "created" once the
+	# droplet is active, and "installed" once kai has installed the recipe.
+	State : { address : Str, droplet_id : U64, name : Str, operation_tag : Str, recipe : Str, region : Str, size : Str, ssh_key_id : U64, status : Str }
+
+	state_path = |name| Path.join(directory(name), "instance.json")
+
+	save! : State => Try({}, _)
+	save! = |state| {
+		temporary = Path.join(directory(state.name), "instance.json.new")
+		Path.write_utf8!(temporary, Json.to_str(state))?
+		Path.rename!(temporary, state_path(state.name))
+	}
+
+	read! : Str => Try(State, _)
+	read! = |name| {
+		decoded : Try(State, _)
+		decoded = Json.parse(Path.read_utf8!(state_path(name))?)
+		match decoded {
+			Ok(state) => Ok(state)
+			Err(_) => Err(InvalidInstanceState(name))
+		}
+	}
+
+	# The names of the launches under .aion/instances.
+	names! : () => Try(List(Str), _)
+	names! = || {
+		root = Path.utf8(".aion/instances")
+		if !Path.exists!(root)? {
+			return Ok([])
+		}
+		paths = Path.list!(root)?
+		Ok(paths.keep_oks(|path| Path.filename(path).map_ok(Path.display)))
+	}
 }
