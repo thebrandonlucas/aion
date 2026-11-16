@@ -1,6 +1,8 @@
 # aion's own tools, on the pinned kai (tools/kai-pin): the Roc compiler kai
-# pins and what a launch runs beside kai. `kai run build` builds ./aion, and
-# `kai run aion -- launch web demo --dry-run` builds and runs it.
+# pins and what a launch runs beside kai. `kai run build` builds ./aion.
+#
+# Testing without DigitalOcean: `kai run mock-digitalocean` serves a mock
+# API on 127.0.0.1:8090; see tools/mock-digitalocean.
 app [kaifile] {
 	pf: platform ".kai-pin/kai/platform/main.roc",
 	std: ".kai-pin/kai/plugins/std/main.roc",
@@ -9,6 +11,8 @@ app [kaifile] {
 import std.Std
 
 build = ["roc", "build", "src/aion.roc", "--opt=size", "--output=aion"]
+
+roc = |tool| ["roc", "tools/${tool}/main.roc", "--"]
 
 kaifile = Std.kaifile([
 	Name("aion"),
@@ -22,7 +26,12 @@ kaifile = Std.kaifile([
 	),
 	Task("build", [Use("cli"), Run(build)]),
 	Task("check", [Use("cli"), Run(["roc", "check", "src/aion.roc"])]),
-	Task("format", [Use("cli"), Run(["roc", "fmt", "src/aion.roc", "src/Instance.roc", "src/Launch.roc", "src/DigitalOcean.roc"])]),
-	Task("aion", [Use("cli"), Run(["./aion"])]),
-	Workflow("aion", [RunTask("build", []), RunTask("aion", [])]),
+	Task(
+		"format",
+		[
+			Use("cli"),
+			Run(["roc", "fmt", "src/aion.roc", "src/Instance.roc", "src/Launch.roc", "src/DigitalOcean.roc", "src/DigitalOceanApi.roc", "tools/mock-digitalocean/main.roc"]),
+		],
+	),
+	Task("mock-digitalocean", [Use("cli"), Run(roc("mock-digitalocean"))]),
 ])
