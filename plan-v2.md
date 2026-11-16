@@ -42,7 +42,7 @@ in small commits after that, not in one.
 ## Kai
 
 aion builds against the unmerged machine PR stack, kai#489 at `1a307ed`
-(on #488 and #487; #466-#469 are merged). `Kaifile.bootstrap.roc` fetches
+(on #488 and #487; #466-#469 are merged). `tools/kai-pin/Kaifile.roc` fetches
 that commit into `.kai-pin/kai` (ignored), builds its platform host and its
 `kai-x64musl` with the v0.0.11 release kai (the release whose platform kai's
 own Kaifile names), and leaves `.kai-pin/kai-bin/bin/kai`. Recipes name the
@@ -128,12 +128,27 @@ checked over HTTPS with no DNS API.
 
 ## Slices
 
-1. This plan. ✔ when committed.
-2. Pin kai at `1a307ed` (`Kaifile.bootstrap.roc`).
+1. This plan. Done.
+2. Pin kai at `1a307ed` (`tools/kai-pin/Kaifile.roc`). Done.
 3. `profiles/digitalocean` and `recipes/web`; `kai check` and
-   `kai --dry-run machine install` pass.
-4. Root `Kaifile.roc` that builds the v2 CLI with the pinned kai.
-5. `aion launch --dry-run`: instance staging, DO request body, kai argv.
+   `kai --dry-run machine install` pass, and `kai machine build web` builds
+   the NixOS system. Done.
+4. Root `Kaifile.roc` that builds the v2 CLI with the pinned kai. Done.
+5. `aion launch --dry-run`: instance staging, DO request body, kai argv. Done.
 6. Live `launch`, `update`, `destroy` behind the confirmations (needs go).
 7. Everpaid gate calls `launch`; delete v1 in chunks.
 8. More recipes (the Pi agent machine with a `Secret` for the model key).
+
+## Found while building slices 1-5
+
+- kai refuses symlinked or `..` module paths, so the profile is copied into
+  each launch (`kai-issues/024`), and a launch is a whole project copy
+  because kai keys facts and host keys by machine name (`025`).
+- `kai machine switch --to` checks the host key against the operator's
+  `known_hosts`, which a fresh droplet is never in (`023`). Slice 6 needs a
+  decision: pin `secrets/hosts/<slug>.pub` into `known_hosts` after
+  install, or wait for kai to do it.
+- `DigitalOceanApi.roc` is on basic-cli 0.22's `Http`; the v2 CLI is on
+  0.26, kai's pin, so the client is ported in slice 6.
+- DigitalOcean DHCP for the installed system is inferred from v1, whose
+  droplets booted with only NixOS's DHCP; the first live launch confirms it.
