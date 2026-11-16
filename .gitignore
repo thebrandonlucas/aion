@@ -1,8 +1,10 @@
 .aion/
-.kai/
+**/.kai/*
+!**/.kai/lock.json
 /aion
 /aion-init
 /kai
 /result
 .env
 kai-issues
+.kai-pin/
