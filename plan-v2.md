@@ -157,8 +157,9 @@ checked over HTTPS with no DNS API.
 - DigitalOcean serves no DHCP to droplets from its base images (v1's
   custom images got it); the profile applies the config drive with
   cloud-init.
-- `aion update` needs the machine's host key in `~/.ssh/known_hosts`
-  (`kai-issues/023`); deciding how aion pins it is still open.
+- `aion install` pins the host key kai made (`secrets/hosts/<slug>.pub`)
+  in `~/.ssh/known_hosts` for the address, after `ssh-keygen -R`, and
+  `aion destroy` removes it, until kai trusts that key itself (kai#496).
 
 ## Testing without a bill
 

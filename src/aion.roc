@@ -190,6 +190,24 @@ launch! = |recipe, name, key_file| {
 	install!(name)
 }
 
+# Drops every key ~/.ssh/known_hosts holds for `host`, which may be an
+# earlier server's at a reused address. ssh-keygen keeps known_hosts.old.
+forget_host_key! = |host| {
+	_ = Cmd.new(OsStr.from_str("ssh-keygen")).args(strs(["-R", host])).run!()
+	{}
+}
+
+# Trusts exactly the host key kai made for the machine before it booted, so
+# kai's ssh and nix copy can reach it with host-key checking on (kai#496).
+pin_host_key! = |state| {
+	public = Path.read_utf8!(Path.join(Instance.directory(state.name), "secrets/hosts/${state.recipe}.pub"))?
+	key = Str.join_with(public.trim().split_on(" ").take_first(2), " ")
+	host = ssh_host!(state.address)
+	home = Env.var_str!(OsStr.from_str("HOME"))?
+	forget_host_key!(host)
+	Path.append_utf8!(Path.join(Path.utf8(home), ".ssh/known_hosts"), "${host} ${key}\n")
+}
+
 # Installs a created launch's recipe with kai, erasing the droplet's disk.
 # Run again after a failed install; the droplet keeps running meanwhile.
 install! = |name| {
@@ -206,6 +224,7 @@ install! = |name| {
 			return Err(error)
 		}
 	}
+	pin_host_key!(state)?
 	Instance.save!({ ..state, status: "installed" })?
 	Stdout.line!(
 		Str.join_with(
@@ -235,6 +254,7 @@ destroy! = |name| {
 		return Err(NoDropletId("${name} has no droplet id; look for tag ${state.operation_tag} in DigitalOcean"))
 	}
 	DigitalOceanApi.delete_droplet!(state.droplet_id, auth)?
+	forget_host_key!(ssh_host!(state.address))
 	Path.delete_all!(Instance.directory(name))?
 	Stdout.line!("deleted droplet ${U64.to_str(state.droplet_id)} and .aion/instances/${name}")
 }
