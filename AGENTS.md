@@ -7,3 +7,8 @@
 - work in chunks. Hard limit of +300/-300 per commit. preference for +-50.
 
 - Read all the agent files in ../kai-blueprint/ as well and when in doubt copy advice from there
+- When discovering a Roc bug:
+    1. Check whether it has already been fixed upstream.
+    2. If fixed and a pinned dependency (Roc, basic-cli, a Roc package) can be upgraded to include the fix, upgrade it, along with any blocking downstream dependency. aion's Roc is the one kai pins, so an upgrade may have to wait for kai.
+    3. Otherwise implement a workaround. Its comment links the upstream issue and fix (if any) and names the upgrade that allows removing it.
+    4. If it isn't reported upstream, add a reproduction to the roc-issues repo (https://github.com/thebrandonlucas/roc-issues; see its AGENTS.md for where a draft goes) and list it for the user to report. Never file issues yourself.

@@ -144,8 +144,11 @@ serve_one! = |listener, state| {
 	Ok((next, target != "/mock/stop"))
 }
 
-# A loop, not recursion: roc nightly-2026-10-21 segfaults in lambda_solve on
-# the recursive form.
+# A loop, not recursion: on the nightly-2026-10-21-5349569 kai pins, roc
+# check segfaults in lambda_solve on the recursive form, which
+# nightly-2026-11-14-a87808d fixed. Recurse again once kai's Roc pin is at
+# least that nightly; roc-issues archive/BUG-038
+# (https://github.com/thebrandonlucas/roc-issues/tree/master/archive/BUG-038-recursive-effect-tuple-lambda-solve-segfault).
 serve! = |listener, initial| {
 	var $state = initial
 	var $running = Bool.True
