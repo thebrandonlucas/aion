@@ -100,7 +100,7 @@ with `Modules(["profiles/digitalocean.nix"])`; aion copies it into the
 instance because kai requires module files inside the project. The DO
 profile adds the QEMU guest profile and the serial console; disks come from
 `Disk(SingleDisk("/dev/vda"))`, drivers from kai's nixos-facter report, and
-networking from DHCP, which DigitalOcean serves for the public IPv4.
+networking from the droplet's config drive, which cloud-init applies.
 
 First recipe: `web`, NixOS with root SSH keys and the typed Caddy service
 serving `/var/www` at the instance's sslip.io name, so a launch can be
