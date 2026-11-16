@@ -21,6 +21,12 @@ DigitalOcean := [].{
 	droplet_create_body = |name, image_id, ssh_keys, operation_tag, region, size|
 		{ image: image_id, name, region, size, ssh_keys, tags: ["aion", operation_tag] }
 
+	# A droplet from one of DigitalOcean's base images, such as
+	# `ubuntu-24-04-x64`, that kai then installs a recipe over.
+	base_droplet_body : Str, Str, List(U64), Str, Str, Str -> { image : Str, name : Str, region : Str, size : Str, ssh_keys : List(U64), tags : List(Str) }
+	base_droplet_body = |name, image, ssh_keys, operation_tag, region, size|
+		{ image, name, region, size, ssh_keys, tags: ["aion", operation_tag] }
+
 	public_ipv4s = |droplet|
 		droplet.networks.v4.keep_if(|network| network.type == "public").map(|network| network.ip_address)
 
