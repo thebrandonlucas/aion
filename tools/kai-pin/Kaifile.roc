@@ -1,6 +1,7 @@
 # Builds the kai aion uses: the machine PR stack (kai#489 and below) at the
-# commit `pin` names, until it merges and is released. Run with the v0.0.11
-# release kai, whose platform kai's own Kaifile.roc names:
+# commit `pin` names, with patches/ applied, until it merges and is
+# released. Run with the v0.0.11 release kai, whose platform kai's own
+# Kaifile.roc names:
 #
 #   nix run github:thebrandonlucas/kai/261825dc5ec439071c7c3bd15c0b2a40e3236379 \
 #     -- -f tools/kai-pin/Kaifile.roc workflow pin-kai
@@ -44,8 +45,10 @@ kaifile = Std.kaifile([
 	),
 	Task(
 		"kai-checkout",
-		[Use("pin"), Run(git(["-c", "advice.detachedHead=false", "checkout", "-q", "--detach", pin]))],
+		[Use("pin"), Run(git(["-c", "advice.detachedHead=false", "checkout", "-q", "--force", "--detach", pin]))],
 	),
+	# kai#463 gaps aion needs fixed before the stack merges; see kai-issues/028.
+	Task("kai-patch", [Use("pin"), Run(git(["apply", "../../tools/kai-pin/patches/remote-machines.patch"]))]),
 	# The platform host the checkout's platform/main.roc links Kaifiles with.
 	Task(
 		"kai-platform",
@@ -73,6 +76,7 @@ kaifile = Std.kaifile([
 			RunTask("kai-init", []),
 			RunTask("kai-fetch", []),
 			RunTask("kai-checkout", []),
+			RunTask("kai-patch", []),
 			RunTask("kai-platform", []),
 			RunTask("kai-binary", []),
 		],

@@ -1,0 +1,31 @@
+diff --git a/plugins/machine/NixosBackend.roc b/plugins/machine/NixosBackend.roc
+index 71007a2..16be2df 100644
+--- a/plugins/machine/NixosBackend.roc
++++ b/plugins/machine/NixosBackend.roc
+@@ -167,7 +167,7 @@ NixosBackend :: [].{
+ 				built = NixosBackend.build(project, machines, m, ctx, link)?
+ 				prompt = "Switch ${target} to machine ${m.name}, ${restarting}"
+ 				store = "ssh-ng://${target}"
+-				copy = ["nix", "copy", "--substitute-on-destination", "--to", store, link]
++				copy = ["nix", "copy", "--no-check-sigs", "--substitute-on-destination", "--to", store, link]
+ 				set_profile = ["build", "--no-link", "--profile", system_profile]
+ 				set_command = as_root(nix.concat(set_profile))
+ 				set = NixosBackend.remote_profile(link, target, set_command)
+@@ -318,7 +318,7 @@ NixosBackend :: [].{
+ 			\\shift
+ 			\\exec nix run --inputs-from "$flake" default#nixos-anywhere -- "$@"
+ 		["sh", "-c", Str.join_with([NixosBackend.impure, script], "\n"), "sh", flake]
+-			.concat(["--flake", "${flake}#${name}", "--target-host", target])
++			.concat(["--flake", "${flake}#${name}", "--target-host", target, "--option", "pure-eval", "false", "--kexec", "https://github.com/nix-community/nixos-images/releases/download/nixos-unstable/nixos-kexec-installer-noninteractive-x86_64-linux.tar.gz"])
+ 	}
+ 
+ 	## Adds `pure-eval = false` to any NIX_CONFIG the user has.
+@@ -376,7 +376,7 @@ NixosBackend :: [].{
+ 		secrets = "${ctx.layout.project_root}/secrets"
+ 		NixosBackend.with_age(flake, Str.join_with(script, "\n"))
+ 			.concat([flake, identity, secrets, m.name, Str.join_with(m.operators, "\n")])
+-			.concat(["--flake", "${flake}#${m.name}", "--target-host", target])
++			.concat(["--flake", "${flake}#${m.name}", "--target-host", target, "--option", "pure-eval", "false", "--kexec", "https://github.com/nix-community/nixos-images/releases/download/nixos-unstable/nixos-kexec-installer-noninteractive-x86_64-linux.tar.gz"])
+ 	}
+ 
+ 	## `sh -c script sh` with age and ssh-keygen from the locked nixpkgs of
