@@ -135,11 +135,11 @@ checked over HTTPS with no DNS API.
    the NixOS system. Done.
 4. Root `Kaifile.roc` that builds the v2 CLI with the pinned kai. Done.
 5. `aion launch --dry-run`: instance staging, DO request body, kai argv. Done.
-6. Live `launch`, `install`, `update`, `destroy`, `list`. Built; tested
-   against the mock API (create, poll, state, destroy) and a local VM of
-   the base image (boots, root SSH). The VM install and update wait on an
-   SSH alias for port 2222 (`kai-issues/027`); the real-droplet run waits
-   on a go.
+6. Live `launch`, `install`, `update`, `destroy`, `list`, `resources`.
+   Done: a real droplet launched the `web` recipe (NixOS 26.11, HTTPS via
+   Caddy at its sslip.io name), `update` switched it to generation 2, and
+   `destroy` removed it. It took the cloud-init profile fix and three kai
+   patches (`tools/kai-pin/patches`, `kai-issues/028`-`030`).
 7. Delete v1 in chunks.
 8. More recipes (the Pi agent machine with a `Secret` for the model key).
 
@@ -154,8 +154,11 @@ checked over HTTPS with no DNS API.
   install, or wait for kai to do it.
 - `DigitalOceanApi.roc` is on basic-cli 0.22's `Http`; the v2 CLI is on
   0.26, kai's pin, so the client is ported in slice 6.
-- DigitalOcean DHCP for the installed system is inferred from v1, whose
-  droplets booted with only NixOS's DHCP; the first live launch confirms it.
+- DigitalOcean serves no DHCP to droplets from its base images (v1's
+  custom images got it); the profile applies the config drive with
+  cloud-init.
+- `aion update` needs the machine's host key in `~/.ssh/known_hosts`
+  (`kai-issues/023`); deciding how aion pins it is still open.
 
 ## Testing without a bill
 
