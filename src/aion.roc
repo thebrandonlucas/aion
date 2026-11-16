@@ -28,13 +28,14 @@ usage = Str.join_with(
 		"  aion update <name>      switch the machine to its instance's Kaifile.roc",
 		"  aion destroy <name>     delete the droplet and the instance",
 		"  aion list",
+		"  aion resources        aion-tagged droplets in DigitalOcean (read-only)",
 		"",
 		"A launch creates a droplet at once, bills from then on, and erases it to",
 		"install the recipe. A dry run stages .aion/plans/<name>, prints kai's",
 		"install plan and the DigitalOcean request, and creates nothing.",
 		"",
 		"Environment:",
-		"  DIGITALOCEAN_TOKEN     API token, for launch and destroy",
+		"  DIGITALOCEAN_TOKEN     API token, for launch and destroy (or in .env)",
 		"  AION_KAI               kai to run (default: .kai-pin/kai-bin/kai)",
 		"  AION_REGION            DigitalOcean region (default: ${Launch.default_region})",
 		"  AION_SIZE              Droplet size (default: ${Launch.default_size})",
@@ -79,8 +80,19 @@ show_argv = |argv| Str.join_with(["kai"].concat(argv), " ")
 
 strs = |values| values.map(OsStr.from_str)
 
+# A KEY=value line of the ignored .env, without quotes.
+dotenv_value! = |name| {
+	lines = (Path.read_utf8!(Path.utf8(".env")) ?? "").split_on("\n")
+	match lines.keep_if(|line| line.starts_with("${name}=")) {
+		[line] => Ok(line.drop_prefix("${name}=").trim().drop_prefix("\"").drop_suffix("\""))
+		_ => Err(MissingToken("set ${name}, in the environment or .env"))
+	}
+}
+
+# The token from the environment, or else from .env. It is only ever sent
+# in the Authorization header.
 auth! = || {
-	token = Env.var_str!(OsStr.from_str("DIGITALOCEAN_TOKEN")) ? |_| MissingToken("set DIGITALOCEAN_TOKEN")
+	token = Env.var_str!(OsStr.from_str("DIGITALOCEAN_TOKEN")) ?? dotenv_value!("DIGITALOCEAN_TOKEN")?
 	Ok({ url: env_or!("AION_DIGITALOCEAN_URL", DigitalOceanApi.default_url), token })
 }
 
@@ -227,6 +239,20 @@ destroy! = |name| {
 	Stdout.line!("deleted droplet ${U64.to_str(state.droplet_id)} and .aion/instances/${name}")
 }
 
+# aion-tagged droplets as DigitalOcean reports them; reads only.
+resources! = || {
+	auth = auth!()?
+	droplets = DigitalOceanApi.list_droplets_by_tag!("aion", auth)?
+	if droplets.is_empty() {
+		return Stdout.line!("no aion droplets")
+	}
+	for d in droplets {
+		address = DigitalOcean.public_ipv4(d) ?? "-"
+		Stdout.line!("${d.name}  droplet ${U64.to_str(d.id)}  ${d.status}  ${address}  ${d.region.slug} ${d.size_slug}  ${Str.join_with(d.tags, ",")}")?
+	}
+	Ok({})
+}
+
 list! = || {
 	for name in Instance.names!()? {
 		line = match Instance.read!(name) {
@@ -280,6 +306,7 @@ main! = |args| {
 		["update", name] => update!(name)
 		["destroy", name] => destroy!(name)
 		["list"] => list!()
+		["resources"] => resources!()
 		_ => Stdout.line!(usage)
 	}
 }
