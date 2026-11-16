@@ -16,11 +16,8 @@ the machine. kai never learns what DigitalOcean is; aion never writes Nix.
   `204`-only deletion.
 - Local non-secret state under `.aion/`, the global create guard, and the
   `aion` tag on every resource.
-- `status` and `resources`, and the cost confirmations (`create <name>`).
+- `resources` (provider inventory), later.
 - SSH key validation and DigitalOcean key registration (`SshKey.roc`).
-- The Everpaid payment gate (`Everpaid*.roc`, `aion-web.roc`): a settled
-  invoice runs the same guarded launch, now `aion launch` instead of
-  `aion create-paid`.
 - The recipe catalog idea: one directory per recipe with a README title.
 
 ## What goes
@@ -33,6 +30,9 @@ the machine. kai never learns what DigitalOcean is; aion never writes Nix.
   `AionBuildPlugin.roc`).
 - aion's own closure copy and activation over SSH (`deploy`, `aion-switch`):
   `kai machine install` and `kai machine switch` do it.
+- Every gate, for now: the Everpaid payment page (`Everpaid*.roc`,
+  `aion-web.roc`) and the typed cost confirmations. aion is an internal tool;
+  `launch` creates at once.
 - `aion-init.roc` and the model-key transfer. A recipe that needs a key
   declares a `Secret` and aion sets it with `kai secret set` (later slice).
 
@@ -45,7 +45,7 @@ aion builds against the unmerged machine PR stack, kai#489 at `1a307ed`
 (on #488 and #487; #466-#469 are merged). `tools/kai-pin/Kaifile.roc` fetches
 that commit into `.kai-pin/kai` (ignored), builds its platform host and its
 `kai-x64musl` with the v0.0.11 release kai (the release whose platform kai's
-own Kaifile names), and leaves `.kai-pin/kai-bin/bin/kai`. Recipes name the
+own Kaifile names), and leaves `.kai-pin/kai-bin/kai`. Recipes name the
 checkout's platform, std and machine plugin by relative path, as kai's
 `examples/` do. When the stack merges and is released, the pin moves to the
 release and the paths become release URLs.
@@ -53,9 +53,8 @@ release and the paths become release URLs.
 ## CLI flow
 
 ```console
-$ aion recipes list
 $ aion launch web demo --dry-run          # plans everything, creates nothing
-$ aion launch web demo                    # asks "create demo", then:
+$ aion launch web demo                    # creates at once:
     1. stage .aion/instances/demo/ from recipes/web + profiles/digitalocean
     2. kai check, kai machine build web    (fails before anything is billed)
     3. POST /v2/droplets: ubuntu-24-04-x64, the operator's DO SSH key, tags
@@ -64,8 +63,9 @@ $ aion launch web demo                    # asks "create demo", then:
     5. kai --yes machine install web --to root@IP     (in the instance dir)
     6. save .aion/instances/demo/instance.json
 $ aion update demo                        # kai machine switch web --to root@IP
-$ aion destroy demo                       # DELETE the droplet; keep the dir
-$ aion status | aion resources            # as v1
+$ aion install demo                       # retry the kai install step
+$ aion destroy demo                       # DELETE the droplet, then the dir
+$ aion list
 ```
 
 `--dry-run` stages the instance, runs `kai check` and
@@ -135,8 +135,12 @@ checked over HTTPS with no DNS API.
    the NixOS system. Done.
 4. Root `Kaifile.roc` that builds the v2 CLI with the pinned kai. Done.
 5. `aion launch --dry-run`: instance staging, DO request body, kai argv. Done.
-6. Live `launch`, `update`, `destroy` behind the confirmations (needs go).
-7. Everpaid gate calls `launch`; delete v1 in chunks.
+6. Live `launch`, `install`, `update`, `destroy`, `list`. Built; tested
+   against the mock API (create, poll, state, destroy) and a local VM of
+   the base image (boots, root SSH). The VM install and update wait on an
+   SSH alias for port 2222 (`kai-issues/027`); the real-droplet run waits
+   on a go.
+7. Delete v1 in chunks.
 8. More recipes (the Pi agent machine with a `Secret` for the model key).
 
 ## Found while building slices 1-5
@@ -152,3 +156,19 @@ checked over HTTPS with no DNS API.
   0.26, kai's pin, so the client is ported in slice 6.
 - DigitalOcean DHCP for the installed system is inferred from v1, whose
   droplets booted with only NixOS's DHCP; the first live launch confirms it.
+
+## Testing without a bill
+
+```console
+$ kai run mock-digitalocean 8090 &           # mock API, prints each request
+$ AION_DIGITALOCEAN_URL=http://127.0.0.1:8090 DIGITALOCEAN_TOKEN=mock \
+    ./aion launch web t1                     # creates a mock droplet
+$ kai build ubuntu-image --out-link .aion/ubuntu-image
+$ kai run vm-start                           # Ubuntu 24.04 VM, SSH on :2222
+$ AION_SSH_HOST=aion-vm ... ./aion launch web t1   # install onto the VM
+$ kai run vm-stop
+```
+
+`AION_SSH_HOST` sends ssh and kai to another host than the droplet's
+address; it needs a `Host aion-vm` alias with `Port 2222` in
+`~/.ssh/config`, because kai's `--to` takes no port.
