@@ -84,10 +84,14 @@ its host name on the tailnet.
    then destroyed. This confirms DHCP, `/dev/vda` and BIOS boot on Vultr.
 5. `OFFBOARDING.md` in the skeleton: install into the customer's account with
    `--to`, `restic copy` and restore, rekey to their key, hand over the repo.
-6. kai-box `backup.nix` (restic plus a monthly restore test), `status.nix` (a
-   5-minute push to Healthchecks with failed units, generation, revision,
-   template version and expiries), `liton.nix`, `microvm-host.nix`, each
-   adding its secrets to the skeleton.
+6. kai-box `modules/restic.nix` (each backup reports its runs and a monthly
+   restore test) and `modules/status-push.nix` (pushes `kai machine status`
+   to Healthchecks every 15 minutes) are on the kai-box branch
+   `modules/backup-and-status`. Once it merges, the skeleton gets a
+   `services.restic.backups.box` entry whose paths include `/var/lib/kai`, and
+   the `restic-env` and `restic-password` secrets. Status push waits for a kai
+   release with `kai machine status` (kai#534): on 0.0.13 its unit fails. Then
+   `liton.nix` and `microvm-host.nix`.
 
 ## Risks
 
