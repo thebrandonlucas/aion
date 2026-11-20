@@ -12,6 +12,7 @@ import pf.Random
 import pf.Stdout
 
 import Ansi
+import Customer
 import DigitalOcean
 import DigitalOceanApi
 import Instance
@@ -29,6 +30,8 @@ usage = Str.join_with(
 		"  aion destroy <name>     delete the droplet and the instance",
 		"  aion list",
 		"  aion resources        aion-tagged droplets in DigitalOcean (read-only)",
+		"  aion customer new <slug> [--tailnet <magicdns-suffix>]",
+		"  aion customer list",
 		"",
 		"A launch creates a droplet at once, bills from then on, and erases it to",
 		"install the recipe. A dry run stages .aion/plans/<name>, prints kai's",
@@ -41,6 +44,10 @@ usage = Str.join_with(
 		"  AION_SIZE              Droplet size (default: ${Launch.default_size})",
 		"  AION_DIGITALOCEAN_URL  API base URL, for a mock (default: ${DigitalOceanApi.default_url})",
 		"  AION_SSH_HOST          reach every launch at this host instead, for a local VM",
+		"  AION_CLIENTS           where customer repositories live (default: ~/clients)",
+		"  AION_TEMPLATE          the kai-box client skeleton (default: ../kai-box-template/client)",
+		"  AION_OPERATOR_KEY      the operator's public key (default: ~/.ssh/id_ed25519.pub)",
+		"  AION_RECOVERY_RECIPIENT  the offline recovery key's age recipient, a second Operator (or in .env)",
 	],
 	"\n",
 )
@@ -90,7 +97,7 @@ dotenv_value! = |name| {
 	lines = (Path.read_utf8!(Path.utf8(".env")) ?? "").split_on("\n")
 	match lines.keep_if(|line| line.starts_with("${name}=")) {
 		[line] => Ok(line.drop_prefix("${name}=").trim().drop_prefix("\"").drop_suffix("\""))
-		_ => Err(MissingToken("set ${name}, in the environment or .env"))
+		_ => Err(MissingSetting("set ${name}, in the environment or .env"))
 	}
 }
 
@@ -320,9 +327,92 @@ launch_dry_run! = |recipe, name, key_file| {
 	)
 }
 
+# The operator's public key: the one the instance is created with for
+# nixos-anywhere, root's on the box, and its first Operator.
+operator_key! = || {
+	home = Env.var_str!(OsStr.from_str("HOME"))?
+	read_key!(Path.utf8(env_or!("AION_OPERATOR_KEY", "${home}/.ssh/id_ed25519.pub")))
+}
+
+# The offline recovery key's age recipient, every box's second Operator, so
+# its host key and secrets outlive the loss of the operator's own key.
+recovery_recipient! = || {
+	recipient = Env.var_str!(OsStr.from_str("AION_RECOVERY_RECIPIENT")) ?? dotenv_value!("AION_RECOVERY_RECIPIENT")?
+	if recipient.starts_with("age1") and !recipient.contains(" ") {
+		Ok(recipient)
+	} else {
+		Err(InvalidRecoveryRecipient("AION_RECOVERY_RECIPIENT must be one age1... recipient, from age-keygen run offline"))
+	}
+}
+
+clients_root! = || {
+	home = Env.var_str!(OsStr.from_str("HOME"))?
+	Ok(Path.utf8(env_or!("AION_CLIENTS", "${home}/clients")))
+}
+
+customer_new! = |slug, tailnet| {
+	# The box's host name is <slug>-box, which must stay a DNS label.
+	if !valid_name(slug) or slug.to_utf8().len() > 59 {
+		return Err(InvalidName("use 1-59 lowercase ASCII letters, digits, or internal '-' characters"))
+	}
+	operator = operator_key!()?
+	recovery = recovery_recipient!()?
+	directory = Path.join(clients_root!()?, slug)
+	if Path.exists!(directory)? {
+		return Err(CustomerExists(Path.display(directory)))
+	}
+	skeleton = Path.utf8(env_or!("AION_TEMPLATE", "../kai-box-template/client"))
+	Customer.create!(skeleton, directory, { name: slug, root_keys: [operator], operators: [operator, recovery], tailnet })?
+	initialized = Cmd.new(OsStr.from_str("git")).args(strs(["init", "--quiet"])).cwd(directory).inherit_stdio().call!()
+	if initialized.is_err() {
+		return Err(GitInitFailed(Path.display(directory)))
+	}
+	tailnet_step = if (tailnet.is_empty()) ["  0. write the customer's tailnet, its MagicDNS suffix such as tail1234.ts.net, to aion/tailnet"] else []
+	Stdout.line!(
+		Str.join_with(
+			[Ansi.green("Created customer ${slug} in ${Path.display(directory)}"), "Next, there:"]
+				.concat(tailnet_step)
+				.concat(
+					[
+						"  1. work through ONBOARDING.md: the tailnet, then each secret with `kai secret set box ...`",
+						"  2. kai update",
+						"  3. aion customer machine new ${slug} box",
+					],
+				),
+			"\n",
+		),
+	)
+}
+
+customer_list! = || {
+	root = clients_root!()?
+	customers = Customer.names!(root)?
+	if customers.is_empty() {
+		return Stdout.line!("no customers in ${Path.display(root)}")
+	}
+	for slug in customers {
+		directory = Path.join(root, slug)
+		machines = Customer.machine_names!(directory)?
+		if machines.is_empty() {
+			Stdout.line!("${slug}  (no machines)")?
+		}
+		for machine in machines {
+			line = match Customer.read_machine!(directory, machine) {
+				Ok(s) => "${slug}  ${machine}  ${s.status}  ${s.address}  vultr ${s.id}  ${s.region} ${s.plan}"
+				Err(_) => "${slug}  ${machine}  (no readable aion/machines/${machine}.json)"
+			}
+			Stdout.line!(line)?
+		}
+	}
+	Ok({})
+}
+
 main! = |args| {
 	arguments = args.map(OsStr.display)
 	match arguments {
+		["customer", "new", slug] => customer_new!(slug, "")
+		["customer", "new", slug, "--tailnet", tailnet] => customer_new!(slug, tailnet)
+		["customer", "list"] => customer_list!()
 		["launch", recipe, name, "--dry-run"] => launch_dry_run!(recipe, name, "")
 		["launch", recipe, name, "--dry-run", "--ssh-public-key-file", path] => launch_dry_run!(recipe, name, path)
 		["launch", recipe, name] => launch!(recipe, name, "")

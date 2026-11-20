@@ -33,6 +33,8 @@ kaifile = Std.kaifile([
 	Environment("vm", [Overlays(["roc"]), Tools(["rocpkgs.nightly-2026-10-21-5349569", "qemu_kvm", "cloud-utils", "coreutils"])]),
 	Task("build", [Use("cli"), Run(build)]),
 	Task("check", [Use("cli"), Run(["roc", "check", "src/aion.roc"])]),
+	# An unoptimized aion, for trying a change: `kai run dev customer list`.
+	Task("dev", [Use("cli"), Run(["roc", "src/aion.roc", "--"])]),
 	Task(
 		"format",
 		[
