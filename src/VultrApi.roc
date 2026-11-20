@@ -41,7 +41,7 @@ VultrApi := [].{
 		decoded : Try(Vultr.SshKeysResponse, _)
 		decoded = Http.decode_json_response(response)
 		page = decoded?
-		if page.meta.links.next.is_empty() Ok(page.ssh_keys) else Err(ProviderInventoryTooLarge)
+		if (page.meta.links.next.is_empty()) Ok(page.ssh_keys) else Err(ProviderInventoryTooLarge)
 	}
 
 	same_ssh_key = |left, right|
@@ -101,7 +101,7 @@ VultrApi := [].{
 		decoded : Try(Vultr.InstancesResponse, _)
 		decoded = Http.decode_json_response(response)
 		page = decoded?
-		if page.meta.links.next.is_empty() Ok(page.instances) else Err(ProviderInventoryTooLarge)
+		if (page.meta.links.next.is_empty()) Ok(page.instances) else Err(ProviderInventoryTooLarge)
 	}
 
 	get_instance! = |id, auth| {

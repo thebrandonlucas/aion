@@ -13,48 +13,47 @@ import pf.Stdout
 
 import Ansi
 import Customer
-import DigitalOcean
-import DigitalOceanApi
-import Instance
 import Launch
 import SshKey
+import Vultr
+import VultrApi
 
 usage = Str.join_with(
 	[
-		"Aion - NixOS machines on DigitalOcean, installed by kai",
+		"Aion - a customer's Kai box on Vultr, installed by kai",
 		"",
 		"Usage:",
-		"  aion launch <recipe> <name> [--dry-run] [--ssh-public-key-file <path>]",
-		"  aion install <name>     retry kai's install on a launched droplet",
-		"  aion update <name>      switch the machine to its instance's Kaifile.roc",
-		"  aion destroy <name>     delete the droplet and the instance",
-		"  aion list",
-		"  aion resources        aion-tagged droplets in DigitalOcean (read-only)",
 		"  aion customer new <slug> [--tailnet <magicdns-suffix>]",
 		"  aion customer list",
+		"  aion customer machine new <slug> <machine> [--dry-run]",
+		"  aion customer machine install <slug> <machine> [--to <host[:port]>]",
+		"  aion customer machine destroy <slug> <machine>",
+		"  aion resources          aion-tagged Vultr instances (read-only)",
 		"",
-		"A launch creates a droplet at once, bills from then on, and erases it to",
-		"install the recipe. A dry run stages .aion/plans/<name>, prints kai's",
-		"install plan and the DigitalOcean request, and creates nothing.",
+		"`machine new` creates a stock Ubuntu instance at once, bills from then on,",
+		"and has kai erase it to install the machine. `install --to` installs on a",
+		"server aion did not create, such as one in the customer's own account.",
+		"Change an installed box with `kai machine switch <machine>` in its repository.",
 		"",
 		"Environment:",
-		"  DIGITALOCEAN_TOKEN     API token, for launch and destroy (or in .env)",
-		"  AION_KAI               kai to run (default: the 0.0.13 release, through nix run)",
-		"  AION_REGION            DigitalOcean region (default: ${Launch.default_region})",
-		"  AION_SIZE              Droplet size (default: ${Launch.default_size})",
-		"  AION_DIGITALOCEAN_URL  API base URL, for a mock (default: ${DigitalOceanApi.default_url})",
-		"  AION_SSH_HOST          reach every launch at this host instead, for a local VM",
-		"  AION_CLIENTS           where customer repositories live (default: ~/clients)",
-		"  AION_TEMPLATE          the kai-box client skeleton (default: ../kai-box-template/client)",
-		"  AION_OPERATOR_KEY      the operator's public key (default: ~/.ssh/id_ed25519.pub)",
+		"  VULTR_API_KEY            API key, for machine new and destroy (or in .env)",
+		"  AION_REGION              Vultr region (default: ${Vultr.default_region})",
+		"  AION_PLAN                Vultr plan (default: ${Vultr.default_plan})",
+		"  AION_KAI                 kai to run (default: the 0.0.13 release, through nix run)",
+		"  AION_CLIENTS             where customer repositories live (default: ~/clients)",
+		"  AION_TEMPLATE            the kai-box client skeleton (default: ../kai-box-template/client)",
+		"  AION_OPERATOR_KEY        the operator's public key (default: ~/.ssh/id_ed25519.pub)",
 		"  AION_RECOVERY_RECIPIENT  the offline recovery key's age recipient, a second Operator (or in .env)",
+		"  AION_VULTR_URL           API base URL, for a mock (default: ${VultrApi.default_url})",
 	],
 	"\n",
 )
 
+is_name_byte : U8 -> Bool
 is_name_byte = |byte| (byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9')
 
-# A lowercase DNS label, which is also a valid kai HostName and droplet name.
+# A lowercase DNS label, which is also a valid kai machine and host name.
+valid_name : Str -> Bool
 valid_name = |name| {
 	bytes = name.to_utf8()
 	length = bytes.len()
@@ -69,12 +68,12 @@ env_or! = |name, fallback| Env.var_str!(OsStr.from_str(name)) ?? fallback
 
 read_key! = |path| SshKey.canonical(Path.read_utf8!(path)?)
 
-# kai 0.0.13, the release whose platform and machine plugin the recipes
-# name, run from its flake at the release commit.
+# kai 0.0.13, the release whose platform and machine plugin the skeleton
+# names, run from its flake at the release commit.
 release_kai = ["run", "github:thebrandonlucas/kai/9b0174df172041f00acb5d5387c65af96cd9950a", "--"]
 
-# Runs kai in a launch's project, showing its output: AION_KAI if set, or
-# else the release through nix.
+# Runs kai in a customer's repository, showing its output: AION_KAI if set,
+# or else the release through nix.
 kai! = |directory, argv| {
 	kai = env_or!("AION_KAI", "")
 	command = if (kai.is_empty()) Cmd.new(OsStr.from_str("nix")).args(strs(release_kai.concat(argv))) else Cmd.new(Path.to_os_str(Path.absolute!(Path.utf8(kai))?)).args(strs(argv))
@@ -101,230 +100,11 @@ dotenv_value! = |name| {
 	}
 }
 
-# The token from the environment, or else from .env. It is only ever sent
+# The API key from the environment, or else from .env. It is only ever sent
 # in the Authorization header.
 auth! = || {
-	token = Env.var_str!(OsStr.from_str("DIGITALOCEAN_TOKEN")) ?? dotenv_value!("DIGITALOCEAN_TOKEN")?
-	Ok({ url: env_or!("AION_DIGITALOCEAN_URL", DigitalOceanApi.default_url), token })
-}
-
-# Where kai and ssh reach a launch: its address, unless AION_SSH_HOST points
-# a test at a local VM, such as an ~/.ssh/config alias.
-ssh_host! = |address| env_or!("AION_SSH_HOST", address)
-
-# The operator's key and a launch's aion/ inputs.
-launch_inputs! = |name, key_file, domain| {
-	if !valid_name(name) {
-		return Err(InvalidName("use 1-63 lowercase ASCII letters, digits, or internal '-' characters"))
-	}
-	home = Env.var_str!(OsStr.from_str("HOME"))?
-	operator = read_key!(Path.join(Path.utf8(home), ".ssh/id_ed25519.pub"))?
-	customer = if (key_file.is_empty()) operator else read_key!(Path.utf8(key_file))?
-	Ok({ operator, inputs: { name, root_keys: Launch.root_keys(customer, operator), operators: [operator], domain } })
-}
-
-# A fresh droplet's host key is unknown, and the installed system replaces
-# it, so this one probe trusts whatever answers and records nothing.
-wait_for_ssh! = |host, attempt| {
-	probe = Cmd.new(OsStr.from_str("ssh"))
-		.args(strs(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@${host}", "true"]))
-		.run!()
-	ready = match probe {
-		Ok(ran) => ran.status == Exited(0)
-		Err(_) => Bool.False
-	}
-	if ready {
-		Ok({})
-	} else if attempt >= 30 {
-		Err(SshNotReady(host))
-	} else {
-		Duration.sleep!(Duration.seconds(10))?
-		wait_for_ssh!(host, attempt + 1)
-	}
-}
-
-# The droplet's public IPv4 once it is active, polling every 5 seconds.
-wait_active! = |id, auth, attempt| {
-	droplet = DigitalOceanApi.get_droplet!(id, auth)?
-	match (droplet.status, DigitalOcean.public_ipv4(droplet)) {
-		("active", Ok(address)) => Ok(address)
-		_ if attempt >= 60 => Err(DropletNotActive(id))
-		_ => {
-			Duration.sleep!(Duration.seconds(5))?
-			wait_active!(id, auth, attempt + 1)
-		}
-	}
-}
-
-# After an uncertain POST, the droplet the operation tag names, if any.
-reconcile! = |operation_tag, auth|
-	match DigitalOceanApi.list_droplets_by_tag!(operation_tag, auth)? {
-		[droplet] => Ok(droplet.id)
-		[] => Err(CreateUncertain("no droplet is tagged ${operation_tag}; check `aion list` and DigitalOcean before retrying"))
-		_ => Err(CreateUncertain("several droplets are tagged ${operation_tag}; delete the extras in DigitalOcean"))
-	}
-
-launch! = |recipe, name, key_file| {
-	auth = auth!()?
-	region = env_or!("AION_REGION", Launch.default_region)
-	size = env_or!("AION_SIZE", Launch.default_size)
-	launch = launch_inputs!(name, key_file, Launch.placeholder_domain)?
-	directory = Instance.directory(name)
-	if Path.exists!(directory)? {
-		return Err(InstanceExists("${name} is already launched; `aion destroy ${name}` first"))
-	}
-	Instance.stage!(Path.join(Path.utf8("recipes"), recipe), Path.utf8("profiles/digitalocean/digitalocean.nix"), "digitalocean.nix", directory, launch.inputs)?
-	Stdout.line!(Ansi.heading("Building ${recipe} for ${name} before creating anything"))?
-	kai!(directory, ["machine", "build", recipe])?
-	if DigitalOceanApi.list_droplets_by_tag!("aion", auth)?.any(|droplet| droplet.name == name) {
-		return Err(DropletExists("an aion droplet named ${name} exists; see `aion list`"))
-	}
-	key = DigitalOceanApi.register_ssh_key!("aion-operator", launch.operator, auth)?
-	operation_tag = "aion-droplet-${U64.to_str(Random.seed_u64!()?)}"
-	pending = { address: "", droplet_id: 0, name, operation_tag, recipe, region, size, ssh_key_id: key.id, status: "creating" }
-	Instance.save!(pending)?
-	Stdout.line!(Ansi.heading("Creating droplet ${name} (${size}, ${region}), tagged ${operation_tag}"))?
-	body = DigitalOcean.base_droplet_body(name, Launch.base_image, [key.id], operation_tag, region, size)
-	id = match DigitalOceanApi.create_droplet_once!(body, auth) {
-		PostAccepted(droplet) => droplet.id
-		PostRejected(error) => {
-			Path.delete_all!(directory) ?? {}
-			return Err(error)
-		}
-		PostUncertain(_) => reconcile!(operation_tag, auth)?
-	}
-	Instance.save!({ ..pending, droplet_id: id })?
-	address = wait_active!(id, auth, 1)?
-	created = { ..pending, droplet_id: id, address, status: "created" }
-	Instance.save!(created)?
-	Path.write_utf8!(Path.join(directory, "aion/domain"), "${Launch.sslip_domain(address)}\n")?
-	Stdout.line!(Ansi.heading("Droplet ${U64.to_str(id)} is active at ${address}; waiting for SSH"))?
-	install!(name)
-}
-
-# Drops every key ~/.ssh/known_hosts holds for `host`, which may be an
-# earlier server's at a reused address. ssh-keygen keeps known_hosts.old.
-forget_host_key! = |host| {
-	_ = Cmd.new(OsStr.from_str("ssh-keygen")).args(strs(["-R", host])).run!()
-	{}
-}
-
-# Trusts exactly the host key kai made for the machine before it booted, so
-# kai's ssh and nix copy can reach it with host-key checking on (kai#496).
-pin_host_key! = |state| {
-	public = Path.read_utf8!(Path.join(Instance.directory(state.name), "secrets/hosts/${state.recipe}.pub"))?
-	key = Str.join_with(public.trim().split_on(" ").take_first(2), " ")
-	host = ssh_host!(state.address)
-	home = Env.var_str!(OsStr.from_str("HOME"))?
-	forget_host_key!(host)
-	Path.append_utf8!(Path.join(Path.utf8(home), ".ssh/known_hosts"), "${host} ${key}\n")
-}
-
-# Installs a created launch's recipe with kai, erasing the droplet's disk.
-# Run again after a failed install; the droplet keeps running meanwhile.
-install! = |name| {
-	state = Instance.read!(name)?
-	host = ssh_host!(state.address)
-	installed = match wait_for_ssh!(host, 1) {
-		Ok({}) => kai!(Instance.directory(name), Launch.install_argv(state.recipe, host))
-		Err(error) => Err(error)
-	}
-	match installed {
-		Ok({}) => {}
-		Err(error) => {
-			_ = Stdout.line!(Ansi.red("Install failed; droplet ${U64.to_str(state.droplet_id)} is still running. Retry with `aion install ${name}` or remove it with `aion destroy ${name}`.")) ?? {}
-			return Err(error)
-		}
-	}
-	pin_host_key!(state)?
-	Instance.save!({ ..state, status: "installed" })?
-	Stdout.line!(
-		Str.join_with(
-			[
-				Ansi.green("${name} runs ${state.recipe} at ${state.address}"),
-				"  ssh root@${state.address}",
-				"  aion update ${name}     after changing .aion/instances/${name}/Kaifile.roc",
-				"  aion destroy ${name}",
-			],
-			"\n",
-		),
-	)
-}
-
-update! = |name| {
-	state = Instance.read!(name)?
-	if state.status != "installed" {
-		return Err(NotInstalled("${name} is ${state.status}; run `aion install ${name}`"))
-	}
-	kai!(Instance.directory(name), Launch.switch_argv(state.recipe, ssh_host!(state.address)))
-}
-
-destroy! = |name| {
-	auth = auth!()?
-	state = Instance.read!(name)?
-	if state.droplet_id == 0 {
-		return Err(NoDropletId("${name} has no droplet id; look for tag ${state.operation_tag} in DigitalOcean"))
-	}
-	DigitalOceanApi.delete_droplet!(state.droplet_id, auth)?
-	forget_host_key!(ssh_host!(state.address))
-	Path.delete_all!(Instance.directory(name))?
-	Stdout.line!("deleted droplet ${U64.to_str(state.droplet_id)} and .aion/instances/${name}")
-}
-
-# aion-tagged droplets as DigitalOcean reports them; reads only.
-resources! = || {
-	auth = auth!()?
-	droplets = DigitalOceanApi.list_droplets_by_tag!("aion", auth)?
-	if droplets.is_empty() {
-		return Stdout.line!("no aion droplets")
-	}
-	for d in droplets {
-		address = DigitalOcean.public_ipv4(d) ?? "-"
-		Stdout.line!("${d.name}  droplet ${U64.to_str(d.id)}  ${d.status}  ${address}  ${d.region.slug} ${d.size_slug}  ${Str.join_with(d.tags, ",")}")?
-	}
-	Ok({})
-}
-
-list! = || {
-	for name in Instance.names!()? {
-		line = match Instance.read!(name) {
-			Ok(s) => "${name}  ${s.recipe}  ${s.status}  ${s.address}  droplet ${U64.to_str(s.droplet_id)}  ${s.region} ${s.size}"
-			Err(_) => "${name}  (no readable instance.json)"
-		}
-		Stdout.line!(line)?
-	}
-	Ok({})
-}
-
-launch_dry_run! = |recipe, name, key_file| {
-	region = env_or!("AION_REGION", Launch.default_region)
-	size = env_or!("AION_SIZE", Launch.default_size)
-	address = Launch.example_address
-	launch = launch_inputs!(name, key_file, Launch.sslip_domain(address))?
-	target = Instance.plan_directory(name)
-	Path.delete_all!(target) ?? {}
-	Instance.stage!(Path.join(Path.utf8("recipes"), recipe), Path.utf8("profiles/digitalocean/digitalocean.nix"), "digitalocean.nix", target, launch.inputs)?
-	Stdout.line!(Ansi.heading("Staged ${Path.display(target)} from recipes/${recipe}"))?
-	kai!(target, ["check"])?
-	Stdout.line!(Ansi.heading("kai's install plan for root@${address}"))?
-	kai!(target, Launch.dry_install_argv(recipe, address))?
-	body = DigitalOcean.base_droplet_body(name, Launch.base_image, [0], "aion-droplet-DRY-RUN", region, size)
-	Stdout.line!(
-		Str.join_with(
-			[
-				Ansi.heading("A launch would then"),
-				"1. build ${recipe}, register the operator key, and POST ${DigitalOceanApi.default_url}/v2/droplets once:",
-				"   ${Str.inspect(body)}",
-				"   (ssh_keys is the operator key's DigitalOcean id; the tag is unique per launch)",
-				"2. poll the droplet until it is active, and write aion/domain from its IPv4",
-				"3. run, in .aion/instances/${name}: ${show_argv(Launch.install_argv(recipe, "<ipv4>"))}",
-				"4. update later with: ${show_argv(Launch.switch_argv(recipe, "<ipv4>"))}",
-				"",
-				Ansi.dim("Dry run: nothing was sent to DigitalOcean."),
-			],
-			"\n",
-		),
-	)
+	token = Env.var_str!(OsStr.from_str("VULTR_API_KEY")) ?? dotenv_value!("VULTR_API_KEY")?
+	Ok({ url: env_or!("AION_VULTR_URL", VultrApi.default_url), token })
 }
 
 # The operator's public key: the one the instance is created with for
@@ -372,13 +152,11 @@ customer_new! = |slug, tailnet| {
 		Str.join_with(
 			[Ansi.green("Created customer ${slug} in ${Path.display(directory)}"), "Next, there:"]
 				.concat(tailnet_step)
-				.concat(
-					[
-						"  1. work through ONBOARDING.md: the tailnet, then each secret with `kai secret set box ...`",
-						"  2. kai update",
-						"  3. aion customer machine new ${slug} box",
-					],
-				),
+				.concat([
+					"  1. work through ONBOARDING.md: the tailnet, then each secret with `kai secret set box ...`",
+					"  2. kai update",
+					"  3. aion customer machine new ${slug} box",
+				]),
 			"\n",
 		),
 	)
@@ -407,20 +185,246 @@ customer_list! = || {
 	Ok({})
 }
 
+customer_directory! = |slug| {
+	directory = Path.join(clients_root!()?, slug)
+	if !Path.exists!(directory)? {
+		return Err(UnknownCustomer("no customer ${slug} in ${Path.display(clients_root!()?)}"))
+	}
+	Ok(directory)
+}
+
+# A customer's machine is <slug>-<machine>: its Vultr label and its host
+# name, which kai's Host reaches by MagicDNS on the customer's tailnet.
+host_name = |slug, machine| "${slug}-${machine}"
+
+check_machine_name = |slug, machine|
+	if valid_name(machine) and valid_name(host_name(slug, machine)) {
+		Ok({})
+	} else {
+		Err(InvalidName("${host_name(slug, machine)} must be a DNS label of at most 63 lowercase letters, digits and '-'"))
+	}
+
+# Refuses unless this laptop is on the customer's tailnet, whose MagicDNS
+# suffix `tailscale status --json` names when it is the current one.
+check_tailnet! = |directory| {
+	tailnet = Customer.tailnet!(directory)?
+	if tailnet.is_empty() {
+		return Err(NoTailnet("write the customer's MagicDNS suffix, such as tail1234.ts.net, to aion/tailnet"))
+	}
+	status = Cmd.new(OsStr.from_str("tailscale")).args(strs(["status", "--json"])).capture!() ?? ""
+	if status.contains("\"MagicDNSSuffix\": \"${tailnet}\"") {
+		Ok(tailnet)
+	} else {
+		Err(WrongTailnet("this laptop is not on ${tailnet}; find its account with `tailscale switch --list` and run `tailscale switch <account>`"))
+	}
+}
+
+# `host[:port]` as ssh's host and port options, so a local VM behind a
+# forwarded port can stand in for a server.
+ssh_target = |target|
+	match target.split_on(":") {
+		[host, port] => { host, port_options: ["-p", port] }
+		_ => { host: target, port_options: [] }
+	}
+
+# A fresh server's host key is unknown, and the install replaces it, so this
+# probe trusts whatever answers and records nothing.
+wait_for_ssh! = |target, attempt| {
+	t = ssh_target(target)
+	probe = Cmd.new(OsStr.from_str("ssh"))
+		.args(strs(t.port_options.concat(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@${t.host}", "true"])))
+		.run!()
+	ready = match probe {
+		Ok(ran) => ran.status == Exited(0)
+		Err(_) => Bool.False
+	}
+	if ready {
+		Ok({})
+	} else if attempt >= 30 {
+		Err(SshNotReady(target))
+	} else {
+		Duration.sleep!(Duration.seconds(10))?
+		wait_for_ssh!(target, attempt + 1)
+	}
+}
+
+# Waits, up to 5 minutes, for the installed box on the tailnet, trusting
+# only the host key kai placed, as kai's own commands do.
+wait_for_tailnet! = |directory, machine, host, attempt| {
+	public = Path.read_utf8!(Path.join(directory, "secrets/hosts/${machine}.pub"))?
+	known_hosts = Path.join(directory, ".kai/aion-known-hosts")
+	Path.write_utf8!(known_hosts, "${machine} ${Str.join_with(public.trim().split_on(" ").take_first(2), " ")}\n")?
+	probe = Cmd.new(OsStr.from_str("ssh"))
+		.args(strs(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "UserKnownHostsFile=${Path.display(known_hosts)}", "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlias=${machine}", "-o", "LogLevel=ERROR", "root@${host}", "true"]))
+		.run!()
+	ready = match probe {
+		Ok(ran) => ran.status == Exited(0)
+		Err(_) => Bool.False
+	}
+	if ready {
+		Ok({})
+	} else if attempt >= 30 {
+		Err(NotOnTailnet("${host} did not join; log in on Vultr's web console as root (the root-password-hash secret) and read `journalctl -u tailscaled-autoconnect`"))
+	} else {
+		Duration.sleep!(Duration.seconds(10))?
+		wait_for_tailnet!(directory, machine, host, attempt + 1)
+	}
+}
+
+# The instance's public IPv4 once Vultr has installed and booted it,
+# polling every 5 seconds for up to 10 minutes.
+wait_ready! = |id, auth, attempt| {
+	instance = VultrApi.get_instance!(id, auth)?
+	match Vultr.ready_address(instance) {
+		Ok(address) => Ok(address)
+		Err(NotReady) if attempt >= 120 => Err(InstanceNotReady(id))
+		Err(NotReady) => {
+			Duration.sleep!(Duration.seconds(5))?
+			wait_ready!(id, auth, attempt + 1)
+		}
+	}
+}
+
+# After an uncertain POST, the instance the operation tag names, if any.
+reconcile! = |operation_tag, auth|
+	match VultrApi.list_instances_by_tag!(operation_tag, auth)? {
+		[instance] => Ok(instance.id)
+		[] => Err(CreateUncertain("no instance is tagged ${operation_tag}; check `aion resources` and Vultr before retrying"))
+		_ => Err(CreateUncertain("several instances are tagged ${operation_tag}; delete the extras in Vultr"))
+	}
+
+machine_new! = |slug, machine, dry_run| {
+	check_machine_name(slug, machine)?
+	directory = customer_directory!(slug)?
+	if Path.exists!(Customer.machine_path(directory, machine))? {
+		return Err(MachineExists("aion/machines/${machine}.json exists; `aion customer machine destroy ${slug} ${machine}` first"))
+	}
+	label = host_name(slug, machine)
+	region = env_or!("AION_REGION", Vultr.default_region)
+	plan = env_or!("AION_PLAN", Vultr.default_plan)
+	operator = operator_key!()?
+	Stdout.line!(Ansi.heading("Building ${machine} for ${slug} before creating anything"))?
+	kai!(directory, ["machine", "build", machine])?
+	if dry_run {
+		Stdout.line!(Ansi.heading("kai's install plan for root@${Launch.example_address}"))?
+		kai!(directory, Launch.dry_install_argv(machine, Launch.example_address))?
+		body = Vultr.instance_body(label, region, plan, ["<operator key id>"], ["aion", "aion-${slug}", "aion-op-DRY-RUN"])
+		return Stdout.line!(
+			Str.join_with(
+				[
+					Ansi.heading("A real run would then"),
+					"1. register the operator key if Vultr lacks it, and POST ${VultrApi.default_url}/v2/instances once:",
+					"   ${Str.inspect(body)}",
+					"2. poll the instance until it is active, then wait for SSH on its IPv4",
+					"3. run, in ${Path.display(directory)}: ${show_argv(Launch.install_argv(machine, "<ipv4>"))}",
+					"4. wait for root@${label} on the customer's tailnet",
+					"",
+					Ansi.dim("Dry run: nothing was sent to Vultr."),
+				],
+				"\n",
+			),
+		)
+	}
+	_ = check_tailnet!(directory)?
+	auth = auth!()?
+	if VultrApi.list_instances_by_tag!("aion-${slug}", auth)?.any(|instance| instance.label == label) {
+		return Err(InstanceExists("an aion instance labelled ${label} exists; see `aion resources`"))
+	}
+	key = VultrApi.ensure_ssh_key!("aion-operator", operator, auth)?
+	operation_tag = "aion-op-${U64.to_str(Random.seed_u64!()?)}"
+	pending = { address: "", id: "", machine, operation_tag, plan, region, status: "creating" }
+	Customer.save_machine!(directory, pending)?
+	Stdout.line!(Ansi.heading("Creating instance ${label} (${plan}, ${region}), tagged ${operation_tag}"))?
+	body = Vultr.instance_body(label, region, plan, [key.id], ["aion", "aion-${slug}", operation_tag])
+	id = match VultrApi.create_instance_once!(body, auth) {
+		PostAccepted(instance) => instance.id
+		PostRejected(error) => {
+			Customer.forget_machine!(directory, machine) ?? {}
+			return Err(error)
+		}
+		PostUncertain(_) => reconcile!(operation_tag, auth)?
+	}
+	Customer.save_machine!(directory, { ..pending, id })?
+	address = wait_ready!(id, auth, 1)?
+	Customer.save_machine!(directory, { ..pending, id, address, status: "created" })?
+	Stdout.line!(Ansi.heading("Instance ${id} is active at ${address}; waiting for SSH"))?
+	install!(slug, machine, address)
+}
+
+# Installs the machine with kai over whatever runs at `target`, erasing it:
+# the instance `machine new` created, or with --to another server, such as
+# one in the customer's own account. Run again after a failed install.
+install! = |slug, machine, target| {
+	check_machine_name(slug, machine)?
+	directory = customer_directory!(slug)?
+	saved = Customer.read_machine!(directory, machine)
+	address = if (target.is_empty()) (saved?).address else target
+	_ = check_tailnet!(directory)?
+	installed = match wait_for_ssh!(address, 1) {
+		Ok({}) => kai!(directory, Launch.install_argv(machine, address))
+		Err(error) => Err(error)
+	}
+	match installed {
+		Ok({}) => {}
+		Err(error) => {
+			_ = Stdout.line!(Ansi.red("Install failed; the server is still running. Retry with `aion customer machine install ${slug} ${machine}`.")) ?? {}
+			return Err(error)
+		}
+	}
+	match saved {
+		Ok(state) => Customer.save_machine!(directory, { ..state, status: "installed" })?
+		Err(_) => {}
+	}
+	host = "${host_name(slug, machine)}.${Customer.tailnet!(directory)?}"
+	Stdout.line!(Ansi.heading("Installed; waiting for ${host} on the tailnet"))?
+	wait_for_tailnet!(directory, machine, host, 1)?
+	Stdout.line!(
+		Str.join_with(
+			[
+				Ansi.green("${slug}'s ${machine} runs at root@${host}"),
+				"  commit ${Path.display(directory)}: machines/, secrets/ and aion/ record the install",
+				"  kai machine switch ${machine}     there, after changing the Kaifile",
+				"  aion customer machine destroy ${slug} ${machine}",
+			],
+			"\n",
+		),
+	)
+}
+
+destroy! = |slug, machine| {
+	directory = customer_directory!(slug)?
+	state = Customer.read_machine!(directory, machine)?
+	if state.id.is_empty() {
+		return Err(NoInstanceId("${machine} has no instance id; look for tag ${state.operation_tag} in Vultr"))
+	}
+	VultrApi.delete_instance!(state.id, auth!()?)?
+	Customer.forget_machine!(directory, machine)?
+	Stdout.line!("deleted instance ${state.id}; remove ${host_name(slug, machine)} from the customer's tailnet in its admin console")
+}
+
+# aion-tagged instances as Vultr reports them; reads only.
+resources! = || {
+	instances = VultrApi.list_instances_by_tag!("aion", auth!()?)?
+	if instances.is_empty() {
+		return Stdout.line!("no aion instances")
+	}
+	for i in instances {
+		Stdout.line!("${i.label}  instance ${i.id}  ${i.status}/${i.server_status}  ${i.main_ip}  ${i.region} ${i.plan}  ${Str.join_with(i.tags, ",")}")?
+	}
+	Ok({})
+}
+
 main! = |args| {
 	arguments = args.map(OsStr.display)
 	match arguments {
 		["customer", "new", slug] => customer_new!(slug, "")
 		["customer", "new", slug, "--tailnet", tailnet] => customer_new!(slug, tailnet)
 		["customer", "list"] => customer_list!()
-		["launch", recipe, name, "--dry-run"] => launch_dry_run!(recipe, name, "")
-		["launch", recipe, name, "--dry-run", "--ssh-public-key-file", path] => launch_dry_run!(recipe, name, path)
-		["launch", recipe, name] => launch!(recipe, name, "")
-		["launch", recipe, name, "--ssh-public-key-file", path] => launch!(recipe, name, path)
-		["install", name] => install!(name)
-		["update", name] => update!(name)
-		["destroy", name] => destroy!(name)
-		["list"] => list!()
+		["customer", "machine", "new", slug, machine] => machine_new!(slug, machine, Bool.False)
+		["customer", "machine", "new", slug, machine, "--dry-run"] => machine_new!(slug, machine, Bool.True)
+		["customer", "machine", "install", slug, machine] => install!(slug, machine, "")
+		["customer", "machine", "install", slug, machine, "--to", target] => install!(slug, machine, target)
+		["customer", "machine", "destroy", slug, machine] => destroy!(slug, machine)
 		["resources"] => resources!()
 		_ => Stdout.line!(usage)
 	}
