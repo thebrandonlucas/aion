@@ -1,13 +1,13 @@
-# aion's own tools, on the pinned kai (tools/kai-pin): the Roc compiler kai
-# pins and what a launch runs beside kai. `kai run build` builds ./aion.
+# aion's own tools, on kai 0.0.13: the Roc compiler and what a launch runs
+# beside kai. `kai run build` builds ./aion.
 #
 # Testing without DigitalOcean: `kai run mock-digitalocean` serves a mock
 # API on 127.0.0.1:8090, and `kai build ubuntu-image --out-link
 # .aion/ubuntu-image` then `kai run vm-start` boot a local VM from the
 # droplet base image; see tools/mock-digitalocean and tools/vm.
 app [kaifile] {
-	pf: platform ".kai-pin/kai/platform/main.roc",
-	std: ".kai-pin/kai/plugins/std/main.roc",
+	pf: platform "https://github.com/thebrandonlucas/kai/releases/download/v0.0.13/6T3kaftw9oSnAgw4KkodsGVhroQvVb2LZnxRZCqsWKek.tar.zst",
+	std: "https://github.com/thebrandonlucas/kai/releases/download/v0.0.13/std-H7SpbnSTMkdUqJjSYVqXiKRqQUmefutvMTC81Rv2ZYjo.tar.zst",
 }
 
 import std.Std

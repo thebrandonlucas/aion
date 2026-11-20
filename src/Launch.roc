@@ -38,12 +38,6 @@ Launch := [].{
 	root_keys : Str, Str -> List(Str)
 	root_keys = |customer, operator| if (customer == operator) [operator] else [customer, operator]
 
-	# Recipes name the pinned kai checkout from recipes/<slug>/, and an
-	# instance sits one directory deeper, in .aion/instances/<name>/. Only
-	# until kai's release URLs replace the relative paths.
-	instance_kaifile : Str -> Str
-	instance_kaifile = |text| Str.join_with(text.split_on("\"../../.kai-pin/"), "\"../../../.kai-pin/")
-
 	install_argv : Str, Str -> List(Str)
 	install_argv = |machine, address| ["--yes", "machine", "install", machine, "--to", "root@${address}"]
 

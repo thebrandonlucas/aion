@@ -6,9 +6,9 @@
 # profile into profiles/ beside a launch's copy of this file, since kai
 # reads module files only from inside the project.
 app [kaifile] {
-	machine: "../../.kai-pin/kai/plugins/machine/main.roc",
-	pf: platform "../../.kai-pin/kai/platform/main.roc",
-	std: "../../.kai-pin/kai/plugins/std/main.roc",
+	machine: "https://github.com/thebrandonlucas/kai/releases/download/v0.0.13/machine-2i4asMSMGmUHdfaADoxSsYyDwyKvpm6hfGdrp1DqhVc.tar.zst",
+	pf: platform "https://github.com/thebrandonlucas/kai/releases/download/v0.0.13/6T3kaftw9oSnAgw4KkodsGVhroQvVb2LZnxRZCqsWKek.tar.zst",
+	std: "https://github.com/thebrandonlucas/kai/releases/download/v0.0.13/std-H7SpbnSTMkdUqJjSYVqXiKRqQUmefutvMTC81Rv2ZYjo.tar.zst",
 }
 
 import pf.Kaifile

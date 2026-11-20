@@ -23,8 +23,6 @@ Instance := [].{
 		for relative in generated {
 			Path.delete_all!(Path.join(target, relative)) ?? {}
 		}
-		kaifile = Path.join(target, "Kaifile.roc")
-		Path.write_utf8!(kaifile, Launch.instance_kaifile(Path.read_utf8!(kaifile)?))?
 		profiles = Path.join(target, "profiles")
 		Path.create_all!(profiles)?
 		Path.copy!(profile, Path.join(profiles, profile_file))?

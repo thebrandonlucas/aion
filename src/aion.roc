@@ -36,7 +36,7 @@ usage = Str.join_with(
 		"",
 		"Environment:",
 		"  DIGITALOCEAN_TOKEN     API token, for launch and destroy (or in .env)",
-		"  AION_KAI               kai to run (default: .kai-pin/kai-bin/kai)",
+		"  AION_KAI               kai to run (default: the 0.0.13 release, through nix run)",
 		"  AION_REGION            DigitalOcean region (default: ${Launch.default_region})",
 		"  AION_SIZE              Droplet size (default: ${Launch.default_size})",
 		"  AION_DIGITALOCEAN_URL  API base URL, for a mock (default: ${DigitalOceanApi.default_url})",
@@ -62,11 +62,16 @@ env_or! = |name, fallback| Env.var_str!(OsStr.from_str(name)) ?? fallback
 
 read_key! = |path| SshKey.canonical(Path.read_utf8!(path)?)
 
-# Runs kai in a launch's project, showing its output.
+# kai 0.0.13, the release whose platform and machine plugin the recipes
+# name, run from its flake at the release commit.
+release_kai = ["run", "github:thebrandonlucas/kai/9b0174df172041f00acb5d5387c65af96cd9950a", "--"]
+
+# Runs kai in a launch's project, showing its output: AION_KAI if set, or
+# else the release through nix.
 kai! = |directory, argv| {
-	kai = Path.absolute!(Path.utf8(env_or!("AION_KAI", ".kai-pin/kai-bin/kai")))?
-	ran = Cmd.new(Path.to_os_str(kai))
-		.args(argv.map(OsStr.from_str))
+	kai = env_or!("AION_KAI", "")
+	command = if (kai.is_empty()) Cmd.new(OsStr.from_str("nix")).args(strs(release_kai.concat(argv))) else Cmd.new(Path.to_os_str(Path.absolute!(Path.utf8(kai))?)).args(strs(argv))
+	ran = command
 		.cwd(directory)
 		.inherit_stdio()
 		.call!()
