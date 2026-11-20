@@ -1,8 +1,8 @@
-# A local stand-in for a fresh droplet: DigitalOcean's base image, Ubuntu
-# 24.04, under QEMU with KVM, its disk at /dev/vda and root logging in with
-# the operator's key over SSH on 127.0.0.1:2222. With an ~/.ssh/config
-# alias for that port (kai's --to takes none), `AION_SSH_HOST=aion-vm`
-# points a mock launch's install and update at it.
+# A local stand-in for a fresh Vultr instance: stock Ubuntu 24.04 under QEMU
+# with KVM, its disk at /dev/vda and root logging in with the operator's key
+# over SSH on 127.0.0.1:2222, where
+# `aion customer machine install <slug> <machine> --to 127.0.0.1:2222`
+# installs a customer's machine.
 #
 #   roc tools/vm/main.roc -- start IMAGE    boot a new VM over IMAGE
 #   roc tools/vm/main.roc -- stop           stop it and delete its disk
