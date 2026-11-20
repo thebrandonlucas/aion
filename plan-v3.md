@@ -77,7 +77,10 @@ its host name on the tailnet.
 
 1. Publish kai-box (Brandon). Then `kai update` works in a customer
    repository, and the skeleton can ship a `.kai/lock.json`.
-2. `kai machine build box` from the skeleton, and `machine new --dry-run`.
+2. `machine new --dry-run` in a real customer repository. `kai machine build
+   box` already passes on a scratch copy of the skeleton, with the modules
+   vendored: no TCP port is open, only Tailscale's UDP 41641, and
+   `tailscale0` is trusted.
 3. Rehearse on `tools/vm`: `aion customer machine install <slug> box --to
    127.0.0.1:2222`. The VM has no tailnet, so the final wait times out there.
 4. Canary: the operator's own box on Vultr, end to end through the tailnet,
