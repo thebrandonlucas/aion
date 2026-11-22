@@ -22,7 +22,7 @@ kai is missing.
    `AION_RECOVERY_RECIPIENT=age1...`. Every box's secrets are encrypted to it
    as well as to your SSH key, so they survive losing your laptop.
 4. Your SSH key at `~/.ssh/id_ed25519` (or set `AION_OPERATOR_KEY` to the
-   public key). Vultr creates each instance with it so nixos-anywhere can log
+   path of its public key file). Vultr creates each instance with it so nixos-anywhere can log
    in, and it stays root's key on the box.
 5. A checkout of kai-box at `../kai-box-template` (or set `AION_TEMPLATE` to
    its `client/` directory).
