@@ -1,9 +1,0 @@
-environment rad {
-  packages: ["radicle-node"]
-}
-
-machine radicle {
-  environment: rad
-  system: "x86_64-linux"
-  services: ["openssh"]
-}

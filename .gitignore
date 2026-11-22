@@ -1,5 +1,6 @@
 .aion/
-.kai/
+**/.kai/*
+!**/.kai/lock.json
 /aion
 /aion-init
 /kai
